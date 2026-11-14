@@ -19,7 +19,7 @@ from astra.cli import FAILED, environment, write_report
 def command() -> None:
     """Show what git holds of the records of an analysis's planned results.
 
-    ADDR is a result's address, as its record gives it (`output1#u1`, `output2`): `astra plan`
+    ADDR is a result's address, as its record gives it (`output1#u1`, `output2`): `astra check`
     lists them. PATH is the analysis's folder, the current one by default. A record's versions
     are its file at each commit along HEAD's history that changed it, in the repository that
     holds the analysis the result belongs to. Each command exits 0 when it answers; 1 when the

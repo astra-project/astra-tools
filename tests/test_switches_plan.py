@@ -323,8 +323,6 @@ def test_an_output_built_in_none_of_the_roots_universes_has_no_result_to_give(
         "`reader` isn't built in `u1`: `gap` has no case there for `a`, the option its decision "
         "selects"
     )
-    lines = astra("plan", str(top)).stdout.splitlines()
-    assert "  1 output(s) aren't built in some universe, where a switch has no case" in lines
     with pytest.raises(api.RequestError, match="^`reader` has no result in the root's universes"):
         api.plan(top, outputs=["reader"])
     assert results(api.plan(top, outputs=["base"])) == {(".", "base")}

@@ -2,7 +2,7 @@
 it is run, which imports only click until then: `astra --help` loads no library.
 
 Exit codes: 0; 1 when `validate` finds an error, `check` a planned result that isn't
-`unchanged`, `plan`, `view`, `check` and `history` an analysis that breaks a `MUST`, `history`
+`unchanged`, `view`, `check` and `history` an analysis that breaks a `MUST`, `history`
 nothing in git of what it is asked for, a `paper` command a paper or a quote that isn't there,
 or `info` no analysis or no stack to show; 2 for a usage error, a broken environment or an
 internal error.
@@ -34,7 +34,6 @@ COMMANDS = MappingProxyType(
         "info": "astra.cli.info",
         "init": "astra.cli.init",
         "paper": "astra.cli.paper",
-        "plan": "astra.cli.plan",
         "schema": "astra.cli.schema",
         "spec": "astra.cli.spec",
         "validate": "astra.cli.validate",

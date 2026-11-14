@@ -32,7 +32,6 @@ def test_help_names_every_command() -> None:
         "info",
         "init",
         "paper",
-        "plan",
         "schema",
         "spec",
         "validate",
