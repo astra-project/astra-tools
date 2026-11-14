@@ -27,12 +27,14 @@ def command() -> None:
 def paper_add(doi: str, version: int | None, pdf: Path | None) -> None:
     """Add a paper to the cache by DOI.
 
-    DOI can be any valid DOI. For arXiv papers, use the format:
-    10.48550/arXiv.1706.03762
+    An arXiv paper is downloaded from arXiv: give its DOI in the format
+    10.48550/arXiv.2008.03833. No other paper is downloaded: give its PDF
+    with --pdf.
 
+    \b
     Examples:
+        astra paper add 10.48550/arXiv.2008.03833
         astra paper add 10.48550/arXiv.1706.03762 --version 7
-        astra paper add 10.1038/s41586-023-06221-2
         astra paper add 10.1234/example --pdf ./local_paper.pdf
     """
     from astra.cli.text import console as _console
