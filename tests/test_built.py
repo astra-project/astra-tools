@@ -374,7 +374,7 @@ def test_an_earlier_commits_result_is_read_through_an_import(tmp_path: Path) -> 
         ("NOT_BUILT_IN_UNIVERSE", "/outputs/compared/inputs/1"),
         ("UNDRIVEN_DECLARATION", "/outputs/compared/inputs/1"),
     ]
-    stack = bind(WorktreeReader(top, Repository(top)), "").stack
+    stack = bind(WorktreeReader(top, Repository(top)), "")[0]
     assert stack is not None
     planned = Context(stack, Catalogue.load()).building.planned
     assert list(planned) == [

@@ -1,7 +1,7 @@
-"""The checker: each planned result's record and bytes statuses at each of its places, by the
-check rules, and the evidence's; what each stale result says changed, and what a runner asks of
-one that only reads what it rebuilt (`Status.unchanged_given`); `api.check`, its shape
-`astra-check-report/2`, and `astra check`.
+"""The checker: each planned result's status, by the check rules, and the evidence's; what a
+result that isn't unchanged breaks itself (`Status.why`) and which of its entries read a result
+that isn't what it was made from (`Status.stale_inputs`), which is all a runner goes by;
+`api.check`, its report as JSON, and `astra check`.
 
 The stacks are the worked example, built as a runner builds it (`conftest.build`); an `inner`
 reached through `inner` and `stage.inner`; an analysis from a commit, read through its records;
@@ -25,9 +25,17 @@ from astra import api
 from astra.check import CODES, CheckReport, Status
 from astra.cli import main
 from astra.diagnostics import Catalogue
-from astra.hashing import Digest, digest_bytes, digest_file
-from astra.records import Record, RecordedInput, write_record
-from tests.conftest import ENVIRONMENT, MINIMAL, RUNNER, build, git, repository
+from astra.hashing import Digest, digest_bytes
+from tests.conftest import (
+    ENVIRONMENT,
+    MINIMAL,
+    RUNNER,
+    build,
+    git,
+    owner,
+    remake,
+    repository,
+)
 from tests.spec import DOCUMENTS
 from tests.test_planned import ROOT, SUBANALYSIS
 from tests.test_resolve import FROM_COMMIT as DRIVING
@@ -40,51 +48,46 @@ def astra(*args: str) -> Result:
 
 
 def statuses(report: CheckReport) -> dict[str, tuple[str, str | None]]:
-    """Each place's address, and its record and bytes statuses."""
+    """Each result's id, and its record's and bytes' statuses."""
+    return {id_: (status.state, status.bytes) for id_, status in report.statuses.items()}
+
+
+def codes(report: CheckReport, id_: str) -> list[str]:
+    """The codes of the rules the result `id_` itself breaks."""
+    return [broken.code for broken in report.statuses[id_].why]
+
+
+def messages(report: CheckReport, id_: str) -> list[str]:
+    return [broken.message for broken in report.statuses[id_].why]
+
+
+def errors(status: Status) -> list[str]:
+    """The codes of the `MUST`s a result itself breaks: a result that is stale with none is
+    stale only through what it reads."""
+    return [broken.code for broken in status.why if broken.level == "error"]
+
+
+def recorded(status: Status) -> dict[str, Digest]:
+    """What a result's record says its recipe read, by entry."""
+    assert status.record is not None
     return {
-        status.place.address: (status.record_status, status.bytes_status)
-        for checked in report.results
-        for status in checked.statuses
+        item.entry: Digest(item.content_hash, item.size)
+        for item in status.record.generated_by.inputs
     }
 
 
-def reasons(report: CheckReport, address: str) -> list[str]:
-    """The codes of the rules broken at the place of `address`."""
+def cited(report: CheckReport) -> list[tuple[str, int, tuple[str, ...] | None, str]]:
+    """Each evidence with a status: the insight it backs, which item of its `evidence`, the
+    results it cites, as the report's analysis gives them, and its status."""
+    insights = {
+        insight.ref: insight
+        for analysis in report.analysis.analyses
+        for insight in (*analysis.prior_insights, *analysis.findings)
+    }
     return [
-        reason.code
-        for checked in report.results
-        for status in checked.statuses
-        if status.place.address == address
-        for reason in status.reasons
+        (each.insight, each.index, insights[each.insight].evidence[each.index].cites, each.state)
+        for each in report.evidence
     ]
-
-
-def messages(report: CheckReport, address: str) -> list[str]:
-    return [
-        reason.message
-        for checked in report.results
-        for status in checked.statuses
-        if status.place.address == address
-        for reason in status.reasons
-    ]
-
-
-def changes(report: CheckReport, address: str) -> list[tuple[str | None, str | None]]:
-    """What each reason at the place of `address` says changed, and the entry of its output's
-    `inputs` it is about (`Reason.change`, `Reason.entry`)."""
-    return [
-        (reason.change, reason.entry)
-        for checked in report.results
-        for status in checked.statuses
-        if status.place.address == address
-        for reason in status.reasons
-    ]
-
-
-def status(report: CheckReport, address: str) -> Status:
-    """The status at the place of `address`."""
-    (found,) = [s for c in report.results for s in c.statuses if s.place.address == address]
-    return found
 
 
 def rewrite(path: Path, change: Callable[[dict[str, Any]], object]) -> None:
@@ -92,25 +95,6 @@ def rewrite(path: Path, change: Callable[[dict[str, Any]], object]) -> None:
     value = json.loads(path.read_text("utf-8"))
     change(value)
     path.write_text(json.dumps(value), "utf-8")
-
-
-def remake(top: Path, address: str, data: bytes, environment: str = ENVIRONMENT) -> None:
-    """Make the result whose first place is `address` again in the working tree `top`, as a
-    runner would from HEAD: `data` its bytes, and its record, of what it reads in the working
-    tree, run in `environment`."""
-    (result,) = [r for r in api.resolve(top).results if r.places[0].address == address]
-    (place,) = result.places
-    (top / place.bytes).write_bytes(data)
-    commit = git(top, "rev-parse", "HEAD").strip()
-    made = digest_bytes(data)
-    read = []
-    for entry in result.inputs:
-        found = digest_file(top / entry.path)
-        read.append(RecordedInput(entry.entry, found.content_hash, found.size))
-    record = Record(
-        place.address, made.content_hash, made.size, commit, environment, RUNNER, tuple(read)
-    )
-    write_record(top / place.record, record)
 
 
 UNCHANGED = {
@@ -145,38 +129,46 @@ def test_a_built_analysis_is_unchanged_and_present(worked: Path) -> None:
     (worked / ".astra" / "records" / "output3.json").write_text("not a record")
     report = api.check(worked)
     assert statuses(report) == UNCHANGED
-    assert all(status.reasons == () for c in report.results for status in c.statuses)
-    assert [(e.artifact, e.cites, e.record_status) for e in report.evidence] == [
-        ("output2", ("output2",), "unchanged")
-    ]
-    assert (report.ok, report.at, report.root) == (True, "worktree", "astra.yaml")
-    # The report holds the analysis as it resolved, whose results these are: one call tells a
-    # runner what the results are and how each stands.
-    assert report.resolved is not None
-    assert [checked.result for checked in report.results] == list(report.resolved.results)
-    assert report.resolved.top == worked.resolve()
+    assert all(status.why == () for status in report.statuses.values())
+    assert all(status.stale_inputs == () for status in report.statuses.values())
+    assert cited(report) == [("findings.insight1", 0, ("output2",), "unchanged")]
+    assert report.evidence[0].why == ()
+    # The report holds the analysis as it resolved, whose results these are, by id: one call
+    # tells a runner what the results are and how each stands.
+    assert report.analysis == api.resolve(worked)
+    assert list(report.statuses) == [result.id for result in report.analysis.results]
+    # Each status holds the record at its result's place.
+    for id_, status in report.statuses.items():
+        assert status.record is not None and status.record.address == id_
+        assert status.record.generated_by.environment == ENVIRONMENT
 
 
 def test_a_result_with_no_record_is_missing(tmp_path: Path) -> None:
     """MISSING_RECORD: a result built nowhere is `missing`, with no recorded bytes (`absent`), and
     neither INVALID_RECORD, MISPLACED_RECORD nor MISSING_RECORD_INPUTS is checked for it, nor
-    ABSENT_RESULT, for a result that is `missing`."""
+    ABSENT_RESULT, for a result that is `missing`. Its status holds no record."""
     files = {"astra.yaml": WORKED_EXAMPLE, "data/input1.csv": "1\n"}
     report = api.check(repository(tmp_path, files))
-    assert statuses(report) == {address: ("missing", "absent") for address in UNCHANGED}
-    assert reasons(report, "output2") == ["MISSING_RECORD"]
-    assert not report.ok
+    assert statuses(report) == {id_: ("missing", "absent") for id_ in UNCHANGED}
+    assert codes(report, "output2") == ["MISSING_RECORD"]
+    assert report.statuses["output2"].record is None
+    # A result that is missing itself says nothing of what it reads.
+    assert report.statuses["output2"].stale_inputs == ()
 
 
 def test_a_record_missing_at_one_place_makes_that_result_missing(worked: Path) -> None:
     """MISSING_RECORD, at `.astra/records/{universe}/{name}.json`; and a result made from it has
-    a valid record, but not what it was made from, so it is stale."""
+    a valid record, but not what it was made from, so it is stale: through the entry that reads
+    it, and by no rule it breaks itself."""
     (worked / ".astra" / "records" / "u2" / "output1.json").unlink()
     report = api.check(worked)
     assert statuses(report)["output1#u2"] == ("missing", "absent")
-    assert reasons(report, "output1#u2") == ["MISSING_RECORD"]
+    assert codes(report, "output1#u2") == ["MISSING_RECORD"]
+    (broken,) = report.statuses["output1#u2"].why
+    assert (broken.level, broken.location.file) == ("error", ".astra/records/u2/output1.json")
     assert statuses(report)["output2"] == ("stale", "present")
-    assert messages(report, "output2") == ["`output1#u2`, which it reads, has no valid record"]
+    assert report.statuses["output2"].why == ()
+    assert report.statuses["output2"].stale_inputs == ("output1#u2",)
 
 
 # --- INVALID_RECORD, and astra-spec's record fixtures ---
@@ -195,16 +187,14 @@ def header(fixture: Path) -> str:
 @pytest.mark.parametrize("fixture", INVALID, ids=lambda path: path.stem)
 def test_an_invalid_record_fixture_leaves_its_result_missing(worked: Path, fixture: Path) -> None:
     """A record that breaks a parse or schema rule leaves its result `missing`, under
-    INVALID_RECORD with the code it breaks as the reason, and isn't checked by MISPLACED_RECORD
-    or MISSING_RECORD_INPUTS."""
+    INVALID_RECORD, whose message ends with the code it breaks, and isn't checked by
+    MISPLACED_RECORD or MISSING_RECORD_INPUTS, nor its bytes by ABSENT_RESULT."""
     shutil.copy(fixture, worked / ".astra" / "records" / "output2.json")
-    report = api.check(worked)
-    assert statuses(report)["output2"] == ("missing", "absent")
-    (found,) = [s for c in report.results for s in c.statuses if s.place.address == "output2"]
-    broken = [reason for reason in found.reasons if reason.code != "ABSENT_RESULT"]
-    assert {reason.code for reason in broken} == {"INVALID_RECORD"}
-    assert {reason.breaks for reason in broken} == {header(fixture)}
-    assert all(r.location.file == ".astra/records/output2.json" for r in broken)
+    found = api.check(worked).statuses["output2"]
+    assert (found.state, found.bytes, found.record) == ("missing", "absent", None)
+    assert {(broken.code, broken.level) for broken in found.why} == {("INVALID_RECORD", "error")}
+    assert all(broken.message.endswith(f" ({header(fixture)})") for broken in found.why)
+    assert all(broken.location.file == ".astra/records/output2.json" for broken in found.why)
 
 
 @pytest.mark.parametrize("fixture", VALID, ids=lambda path: path.stem)
@@ -212,45 +202,44 @@ def test_a_valid_record_fixture_breaks_no_parse_or_schema_rule(worked: Path, fix
     """Read at a planned result's place, it is judged by the other rules: its address and commit
     are another result's, so the result is still missing, but not by INVALID_RECORD."""
     shutil.copy(fixture, worked / ".astra" / "records" / "output2.json")
-    found = reasons(api.check(worked), "output2")
+    found = codes(api.check(worked), "output2")
     assert "INVALID_RECORD" not in found
     assert "MISPLACED_RECORD" in found
 
 
 def test_a_record_of_a_later_minor_version_is_read_by_the_open_schema(worked: Path) -> None:
     """A field it doesn't know is ignored in a record of a greater minor version, and is
-    UNKNOWN_FIELD in one of 0.1; a record below 0.1 has no schema."""
+    UNKNOWN_FIELD in one of 0.1; a record below 0.1 has no schema, which is INVALID_RECORD
+    itself, so its message names no other code."""
     path = worked / ".astra" / "records" / "output2.json"
     rewrite(path, lambda value: value.update(spec_version="0.2.0", later=1))
-    assert statuses(api.check(worked))["output2"] == ("unchanged", "present")
+    report = api.check(worked)
+    assert statuses(report)["output2"] == ("unchanged", "present")
+    record = report.statuses["output2"].record
+    assert record is not None and record.spec_version == "0.2.0"
     rewrite(path, lambda value: value.update(spec_version="0.1.3"))
-    report = api.check(worked)
-    (found,) = [s for c in report.results for s in c.statuses if s.place.address == "output2"]
-    assert [(r.code, r.breaks, r.location.key) for r in found.reasons][0] == (
-        "INVALID_RECORD",
-        "UNKNOWN_FIELD",
-        "later",
-    )
+    first = api.check(worked).statuses["output2"].why[0]
+    assert (first.code, first.location.key) == ("INVALID_RECORD", "later")
+    assert first.message.endswith(" (UNKNOWN_FIELD)")
     rewrite(path, lambda value: value.update(spec_version="0.0.9"))
-    report = api.check(worked)
-    (found,) = [s for c in report.results for s in c.statuses if s.place.address == "output2"]
-    assert [(r.code, r.breaks, r.location.pointer) for r in found.reasons][0] == (
-        "INVALID_RECORD",
-        None,
-        "/spec_version",
-    )
+    first = api.check(worked).statuses["output2"].why[0]
+    assert (first.code, first.location.pointer) == ("INVALID_RECORD", "/spec_version")
+    assert first.message == "records begin at 0.1.0: 0.0.9 has no schema"
 
 
 # --- MISPLACED_RECORD and MISSING_RECORD_INPUTS ---
 
 
 def test_a_record_of_another_result_is_misplaced(worked: Path) -> None:
-    """MISPLACED_RECORD: a record is the record only of the result its `address` names."""
+    """MISPLACED_RECORD: a record is the record only of the result its `address` names, so the
+    status of the result whose place it is at holds none."""
     records = worked / ".astra" / "records"
     shutil.copy(records / "u1" / "output1.json", records / "u2" / "output1.json")
     report = api.check(worked)
     assert statuses(report)["output1#u2"] == ("missing", "absent")
-    assert reasons(report, "output1#u2") == ["MISPLACED_RECORD"]
+    assert codes(report, "output1#u2") == ["MISPLACED_RECORD"]
+    assert report.statuses["output1#u2"].record is None
+    assert report.statuses["output2"].stale_inputs == ("output1#u2",)
 
 
 def test_a_record_holds_one_item_for_each_entry_its_output_lists(worked: Path) -> None:
@@ -263,7 +252,7 @@ def test_a_record_holds_one_item_for_each_entry_its_output_lists(worked: Path) -
     def check(new: list[dict[str, Any]]) -> tuple[str, list[str]]:
         rewrite(path, lambda value: value["generated_by"].update(inputs=new))
         report = api.check(worked)
-        return statuses(report)["output2"][0], reasons(report, "output2")
+        return statuses(report)["output2"][0], codes(report, "output2")
 
     assert check(items[::-1]) == ("unchanged", [])  # their order carries no meaning
     assert check(items[:1]) == ("missing", ["MISSING_RECORD_INPUTS"])
@@ -273,24 +262,32 @@ def test_a_record_holds_one_item_for_each_entry_its_output_lists(worked: Path) -
 
 
 def test_a_record_of_an_output_that_lists_no_inputs_has_none(tmp_path: Path) -> None:
-    """A record of an output that lists no inputs can leave `inputs` out."""
+    """A record of an output that lists no inputs gives none, and can leave `inputs` out."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL})
     build(top)
-    assert "inputs" not in json.loads((top / ".astra" / "records" / "result.json").read_text())
+    path = top / ".astra" / "records" / "result.json"
+    assert json.loads(path.read_text("utf-8"))["generated_by"]["inputs"] == []
     assert statuses(api.check(top)) == {"result": ("unchanged", "present")}
+    rewrite(path, lambda value: value["generated_by"].pop("inputs"))
+    report = api.check(top)
+    assert statuses(report) == {"result": ("unchanged", "present")}
+    record = report.statuses["result"].record
+    assert record is not None and record.generated_by.inputs == ()
 
 
 def test_a_record_whose_commit_cant_be_read_makes_its_result_stale(worked: Path) -> None:
     """A valid record naming a commit the repository hasn't makes its result
     `stale`, with that as its reason; and so does one naming a commit at which its output
-    isn't there. Its bytes are still compared with the record's."""
+    isn't there. Its bytes are still compared with the record's, which its status holds."""
     path = worked / ".astra" / "records" / "output2.json"
     rewrite(path, lambda value: value["generated_by"].update(commit="0" * 40))
     report = api.check(worked)
     assert statuses(report)["output2"] == ("stale", "present")
-    assert reasons(report, "output2") == ["STALE_RESULT"]
+    assert codes(report, "output2") == ["STALE_RESULT"]
     assert "0" * 40 in messages(report, "output2")[0]
-    assert changes(report, "output2") == [("commit", None)]
+    found = report.statuses["output2"]
+    assert found.record is not None and found.record.generated_by.commit == "0" * 40
+    assert found.stale_inputs == ()  # nothing it reads is compared with what that commit gives
     (worked / "astra.yaml").write_text(MINIMAL)
     git(worked, "commit", "--quiet", "--all", "--message", "minimal")
     before = git(worked, "rev-parse", "HEAD").strip()
@@ -298,9 +295,8 @@ def test_a_record_whose_commit_cant_be_read_makes_its_result_stale(worked: Path)
     rewrite(path, lambda value: value["generated_by"].update(commit=before))
     report = api.check(worked)
     assert statuses(report)["output2"] == ("stale", "present")
-    assert reasons(report, "output2") == ["STALE_RESULT"]
+    assert codes(report, "output2") == ["STALE_RESULT"]
     assert "`output2` names no output" in messages(report, "output2")[0]
-    assert changes(report, "output2") == [("commit", None)]
 
 
 # --- STALE_RESULT: when a result is unchanged ---
@@ -328,15 +324,19 @@ def test_a_change_to_the_outputs_declaration_makes_it_stale(
 ) -> None:
     """STALE_RESULT: its recipe's command, and its format, the extension of its default place
     so that its bytes are absent there too; and `output2`, which reads it, is stale. The first
-    is a change of its `declaration`, the second of a `result` it reads, by the entry that
-    reads it."""
+    breaks the rule itself, at its record; the second only reads results that aren't unchanged,
+    by the entries that read them."""
     (worked / "astra.yaml").write_text(WORKED_EXAMPLE.replace(old, new, 1))
     report = api.check(worked)
     assert statuses(report)["output1#u1"][0] == "stale"
-    assert messages(report, "output1#u1")[0].startswith(what)
-    assert changes(report, "output1#u1")[0] == ("declaration", None)
+    first = report.statuses["output1#u1"].why[0]
+    assert (first.code, first.level) == ("STALE_RESULT", "error")
+    assert first.message.startswith(what)
+    assert first.location.file == ".astra/records/u1/output1.json"
+    assert report.statuses["output1#u1"].stale_inputs == ()
     assert statuses(report)["output2"][0] == "stale"
-    assert changes(report, "output2") == [("result", "output1#u1"), ("result", "output1#u2")]
+    assert errors(report.statuses["output2"]) == []
+    assert report.statuses["output2"].stale_inputs == ("output1#u1", "output1#u2")
 
 
 def test_the_order_of_inputs_counts_and_that_of_decisions_doesnt(tmp_path: Path) -> None:
@@ -365,13 +365,16 @@ def test_the_order_of_inputs_counts_and_that_of_decisions_doesnt(tmp_path: Path)
         "its inputs are [`output1#u2`, `output1#u1`], in that order, where they were "
         f"[`output1#u1`, `output1#u2`] at {git(top, 'rev-parse', 'HEAD').strip()[:12]}"
     ]
-    assert changes(report, "output2") == [("declaration", None)]
+    # What it reads is unchanged, each by its entry, in whatever order.
+    assert report.statuses["output2"].stale_inputs == ()
 
 
 def test_a_result_made_again_with_other_bytes_makes_its_readers_stale(worked: Path) -> None:
     """The script `output1`'s recipe runs is edited, and all three stay unchanged;
-    once `output1` in `u1` is made again with other bytes, `output2` is stale until it is
-    rebuilt, and unchanged again where the rebuilt bytes are the same."""
+    once `output1` in `u1` is made again with other bytes, it is unchanged itself, and `output2`
+    is stale through the entry that reads it, by no rule of its own: its record gives the bytes
+    it read, which aren't the ones `output1`'s record now gives. It stays so until it is
+    rebuilt, and is unchanged again where the rebuilt bytes are the same."""
     (worked / "src").mkdir()
     (worked / "src" / "output1.py").write_text("print('edited')\n")
     git(worked, "add", "src")
@@ -381,87 +384,54 @@ def test_a_result_made_again_with_other_bytes_makes_its_readers_stale(worked: Pa
     assert statuses(api.check(worked)) == UNCHANGED
     remake(worked, "output1#u1", b"other\n")
     report = api.check(worked)
-    assert statuses(report)["output2"] == ("stale", "present")
-    assert messages(report, "output2") == [
-        "`output1#u1`, which it reads, was made again since, with other bytes than it read"
-    ]
-    assert changes(report, "output2") == [("result", "output1#u1")]
+    assert statuses(report)["output1#u1"] == ("unchanged", "present")
+    compared = report.statuses["output2"]
+    assert (compared.state, compared.bytes, compared.why) == ("stale", "present", ())
+    assert compared.stale_inputs == ("output1#u1",)
+    assert recorded(compared)["output1#u1"] == digest_bytes(b"output1#u1\n")
+    remade = report.statuses["output1#u1"].record
+    assert remade is not None and remade.content_hash == digest_bytes(b"other\n").content_hash
     remake(worked, "output2", b"output2\n")
     assert statuses(api.check(worked)) == UNCHANGED
 
 
-# --- Status.unchanged_given: what a runner asks once it has rebuilt what a result reads ---
+# --- What a runner goes by, once it has rebuilt what a result reads ---
 
 
-def recorded(found: Status) -> dict[str, Digest]:
-    """What the record at `found`'s place says its recipe read, by entry."""
-    assert found.record is not None
-    return {item.entry: item.digest for item in found.record.inputs}
-
-
-def test_a_result_stale_only_through_what_it_reads_is_unchanged_given_the_bytes_it_read(
-    worked: Path,
-) -> None:
+def test_a_result_stale_only_through_what_it_reads_breaks_no_rule_itself(worked: Path) -> None:
     """Results *made from*: a result made from a stale one is stale only until that one is
-    rebuilt with the hash it recorded. `output1`'s command changes, so both its results are
-    stale in themselves and `output2` only through them: given, for each entry, the bytes its
-    record says it read, it would be unchanged; given other bytes for one, or nothing for one,
-    it wouldn't. A runner asks this once it has rebuilt both, and needs no second check."""
+    rebuilt with the hash it recorded. `output1`'s command changes, so both its results break
+    STALE_RESULT themselves, and read nothing that isn't unchanged; `output2` is stale only
+    through them: no error in its `why`, both entries in `stale_inputs`, and its record still
+    there, giving for each entry the bytes its recipe read. A runner that rebuilds both needs
+    nothing else, and no second check, to tell whether `output2` is unchanged again: it is
+    where each was rebuilt with the hash the record gives for its entry."""
     text = WORKED_EXAMPLE.replace("python src/output1.py", "python3 src/output1.py", 1)
     (worked / "astra.yaml").write_text(text)
     report = api.check(worked)
-    compared = status(report, "output2")
-    read = recorded(compared)
-    assert set(read) == {"output1#u1", "output1#u2"}
-    assert compared.unchanged_given(read)
-    assert not compared.unchanged_given({**read, "output1#u2": digest_bytes(b"other\n")})
-    assert not compared.unchanged_given({"output1#u1": read["output1#u1"]})
-    assert not compared.unchanged_given({})
-    # `output1` in `u1` is stale in itself: nothing rebuilt upstream of it makes it unchanged.
-    assert changes(report, "output1#u1") == [("declaration", None)]
-    assert not status(report, "output1#u1").unchanged_given({})
+    for id_ in ("output1#u1", "output1#u2"):
+        own = report.statuses[id_]
+        assert (own.state, errors(own), own.stale_inputs) == ("stale", ["STALE_RESULT"], ())
+    compared = report.statuses["output2"]
+    assert (compared.state, compared.why) == ("stale", ())
+    assert compared.stale_inputs == ("output1#u1", "output1#u2")
+    assert recorded(compared) == {
+        "output1#u1": digest_bytes(b"output1#u1\n"),
+        "output1#u2": digest_bytes(b"output1#u2\n"),
+    }
 
 
-def test_an_unchanged_result_stays_so_only_given_the_bytes_it_read(worked: Path) -> None:
-    """A runner may rebuild what an unchanged result reads, where only its environment moved,
-    say: the result stays unchanged where the rebuilt bytes are the ones its record gives, and
-    not given others. Its own bytes being absent is no change of what it is made from."""
-    (worked / "results" / "output2.csv").unlink()
-    compared = status(api.check(worked), "output2")
-    assert (compared.record_status, compared.bytes_status) == ("unchanged", "absent")
-    assert compared.unchanged_given({})
-    assert compared.unchanged_given(recorded(compared))
-    assert not compared.unchanged_given({"output1#u1": digest_bytes(b"other\n")})
-
-
-def test_a_result_that_read_other_bytes_than_are_there_is_unchanged_only_given_those(
-    worked: Path,
-) -> None:
-    """`output1` in `u1` was made again with other bytes, and is unchanged itself: `output2` is
-    stale until it is rebuilt, or until `output1` is, with the bytes `output2` read."""
-    remake(worked, "output1#u1", b"other\n")
-    report = api.check(worked)
-    assert statuses(report)["output1#u1"][0] == "unchanged"
-    compared = status(report, "output2")
-    assert not compared.unchanged_given({})
-    assert not compared.unchanged_given({"output1#u1": digest_bytes(b"other\n")})
-    assert compared.unchanged_given({"output1#u1": digest_bytes(b"output1#u1\n")})
-
-
-def test_a_result_with_no_record_that_is_its_own_is_unchanged_given_nothing(worked: Path) -> None:
-    """With no record at its place, or another result's (`MISPLACED_RECORD`), a result is
-    `missing`, whatever it reads."""
-    read = recorded(status(api.check(worked), "output2"))
-    (worked / ".astra" / "records" / "output2.json").unlink()
-    shutil.copy(
-        worked / ".astra/records/u1/output1.json", worked / ".astra/records/u2/output1.json"
-    )
-    report = api.check(worked)
-    for address in ("output2", "output1#u2"):
-        found = status(report, address)
-        assert (found.record_status, found.record) == ("missing", None)
-        assert not found.unchanged_given({})
-    assert not status(report, "output2").unchanged_given(read)
+def test_a_result_stale_in_itself_and_through_what_it_reads_says_both(worked: Path) -> None:
+    """`output2`'s own command changes, and so does the content of the input both results of
+    `output1` read: `output2` breaks STALE_RESULT itself, and reads two results that aren't
+    unchanged. The error in its `why` says that rebuilding those with the bytes it read
+    wouldn't leave it unchanged."""
+    text = WORKED_EXAMPLE.replace("python src/output2.py", "python3 src/output2.py", 1)
+    (worked / "astra.yaml").write_text(text)
+    (worked / "data" / "input1.csv").write_text("2\n")
+    compared = api.check(worked).statuses["output2"]
+    assert (compared.state, errors(compared)) == ("stale", ["STALE_RESULT"])
+    assert compared.stale_inputs == ("output1#u1", "output1#u2")
 
 
 LFS = f"version https://git-lfs.github.com/spec/v1\noid sha256:{'a' * 64}\nsize 6\n"
@@ -474,15 +444,17 @@ STANDING_IN = MINIMAL.replace("    format: json\n", "    format: json\n    input
 def test_an_inputs_content_is_never_what_stands_in_for_it(tmp_path: Path) -> None:
     """STALE_RESULT compares the content of its inputs, never what stands in for it: a
     Git LFS pointer gives its content's hash and size, and the record of what the
-    recipe read holds those, not the pointer's own."""
+    recipe read holds those, not the pointer's own. An input whose content changed is the
+    result's own change, not a stale input: only an entry that reads a result is one."""
     top = repository(tmp_path, {"astra.yaml": STANDING_IN, "data/input1.bin": LFS})
     build(top)  # it hashes the pointer, as no runner would
     report = api.check(top)
     assert statuses(report) == {"result": ("stale", "present")}
+    assert codes(report, "result") == ["STALE_RESULT"]
     assert messages(report, "result") == [
         "the content of `input1`, data/input1.bin, isn't what the recipe read"
     ]
-    assert changes(report, "result") == [("input", "input1")]
+    assert report.statuses["result"].stale_inputs == ()
     path = top / ".astra" / "records" / "result.json"
     content = {"entry": "input1", "content_hash": f"sha256:{'a' * 64}", "size": 6}
     rewrite(path, lambda value: value["generated_by"].update(inputs=[content]))
@@ -494,28 +466,37 @@ def test_an_inputs_content_is_never_what_stands_in_for_it(tmp_path: Path) -> Non
 
 def test_bytes_that_arent_the_recorded_ones_are_absent(worked: Path) -> None:
     """ABSENT_RESULT, a SHOULD: other bytes, a stand-in or nothing at the default place are
-    `absent`, which leaves the record `unchanged` and the check passing."""
+    `absent`, which leaves the record `unchanged` and the check passing. It is a warning in the
+    result's `why`, so no error there, and the status still holds the record: its own bytes
+    being absent is no change of what a result is made from."""
     (worked / "results" / "output2.csv").write_text("other\n")
     report = api.check(worked)
     assert statuses(report)["output2"] == ("unchanged", "absent")
-    (reason,) = [r for c in report.results for s in c.statuses for r in s.reasons]
-    assert (reason.code, reason.level, reason.location.file) == (
+    (broken,) = [broken for status in report.statuses.values() for broken in status.why]
+    assert (broken.code, broken.level, broken.location.file) == (
         "ABSENT_RESULT",
         "warning",
         "results/output2.csv",
     )
-    assert (reason.change, reason.entry) == (None, None)
-    assert report.ok
+    assert broken.message == "the bytes at results/output2.csv aren't the ones its record gives"
+    found = report.statuses["output2"]
+    assert (errors(found), found.stale_inputs) == ([], ())
+    assert found.record is not None and found.record.address == "output2"
+    assert astra("check", str(worked)).exit_code == 0
     (worked / "results" / "output2.csv").write_text(LFS)
     assert statuses(api.check(worked))["output2"] == ("unchanged", "absent")
     (worked / "results" / "output2.csv").unlink()
-    assert statuses(api.check(worked))["output2"] == ("unchanged", "absent")
+    report = api.check(worked)
+    assert statuses(report)["output2"] == ("unchanged", "absent")
+    assert messages(report, "output2") == [
+        "no file is at results/output2.csv, the result's default place"
+    ]
 
 
 # --- STALE_EVIDENCE ---
 
 
-def test_evidence_gets_the_status_of_the_records_it_cites(worked: Path) -> None:
+def test_evidence_gets_the_status_of_the_results_it_cites(worked: Path) -> None:
     """STALE_EVIDENCE: an `artifact` pinned names one result; one naming an output built per
     universe without a pin cites its results in each of the root's universes, and gets the
     worst of their statuses, `missing` then `stale`."""
@@ -525,21 +506,25 @@ def test_evidence_gets_the_status_of_the_records_it_cites(worked: Path) -> None:
     )
     (worked / "astra.yaml").write_text(text)
     report = api.check(worked)
-    assert [(e.artifact, e.cites, e.record_status) for e in report.evidence] == [
-        ("output2", ("output2",), "unchanged"),
-        ("output1#u2", ("output1#u2",), "unchanged"),
-        ("output1", ("output1#u1", "output1#u2"), "unchanged"),
+    assert cited(report) == [
+        ("findings.insight1", 0, ("output2",), "unchanged"),
+        ("findings.insight1", 1, ("output1#u2",), "unchanged"),
+        ("findings.insight1", 2, ("output1#u1", "output1#u2"), "unchanged"),
     ]
+    assert all(evidence.why == () for evidence in report.evidence)
     (worked / "astra.yaml").write_text(text.replace("{decision1: a}", "{decision1: b}"))
     report = api.check(worked)
-    assert [e.record_status for e in report.evidence] == ["stale", "unchanged", "stale"]
+    assert [e.state for e in report.evidence] == ["stale", "unchanged", "stale"]
     (worked / ".astra" / "records" / "u2" / "output1.json").unlink()
     report = api.check(worked)
-    assert [e.record_status for e in report.evidence] == ["stale", "missing", "missing"]
+    assert [e.state for e in report.evidence] == ["stale", "missing", "missing"]
     evidence = report.evidence[2]
-    assert [(r.code, r.level, r.location.pointer) for r in evidence.reasons] == [
+    assert [(d.code, d.level, d.location.pointer) for d in evidence.why] == [
         ("STALE_EVIDENCE", "error", "/findings/insight1/evidence/2/artifact")
     ]
+    assert evidence.why[0].message == (
+        "the evidence cites `output1#u1`, `output1#u2`: one of them is missing"
+    )
 
 
 UNBUILT = MINIMAL + (
@@ -566,8 +551,9 @@ def test_evidence_that_cites_no_result_is_missing_and_fails_the_check(tmp_path: 
     build(top)
     report = api.check(top)
     assert statuses(report) == {"result": ("unchanged", "present")}
-    assert [(e.cites, e.record_status) for e in report.evidence] == [((), "missing")]
-    assert [r.code for r in report.evidence[0].reasons] == ["STALE_EVIDENCE"]
+    assert cited(report) == [("findings.insight1", 0, (), "missing")]
+    assert [d.code for d in report.evidence[0].why] == ["STALE_EVIDENCE"]
+    assert "cites no result" in report.evidence[0].why[0].message
     assert astra("check", str(top)).exit_code == 1
 
 
@@ -593,12 +579,48 @@ def pair(tmp_path: Path) -> Path:
     return top
 
 
-def test_a_result_with_two_names_gets_its_statuses_at_each_place(pair: Path) -> None:
-    """A result with two names gets its statuses at each place."""
-    (pair / ".astra" / "records" / "u1" / "inner.output1.json").unlink()
-    found = statuses(api.check(pair))
-    assert found["inner.output1#u1"] == ("missing", "absent")
-    assert found["stage.inner.output1#u1"] == ("unchanged", "present")
+def test_a_result_with_two_names_has_the_worst_status_of_its_places(pair: Path) -> None:
+    """A result with two names has a record at each of its places and one status, the worst of
+    its places': what each place breaks, there; its bytes `present` only where they are at each
+    default place; and its record, the first place's, only where every place holds one that is
+    the result's. Whatever reads it reads a result that isn't unchanged, by whichever name."""
+    whole = api.check(pair).statuses["inner.output1#u1"]
+    assert (whole.state, whole.bytes, whole.why) == ("unchanged", "present", ())
+    assert whole.record is not None and whole.record.address == "inner.output1#u1"
+    (pair / "results" / "u1" / "stage.inner.output1.json").unlink()
+    absent = api.check(pair).statuses["inner.output1#u1"]
+    assert (absent.state, absent.bytes) == ("unchanged", "absent")
+    assert [(d.code, d.location.file) for d in absent.why] == [
+        ("ABSENT_RESULT", "results/u1/stage.inner.output1.json")
+    ]
+    assert absent.record == whole.record
+    (pair / ".astra" / "records" / "u1" / "stage.inner.output1.json").unlink()
+    report = api.check(pair)
+    missing = report.statuses["inner.output1#u1"]
+    assert (missing.state, missing.bytes, missing.record) == ("missing", "absent", None)
+    assert [(d.code, d.location.file) for d in missing.why] == [
+        ("MISSING_RECORD", ".astra/records/u1/stage.inner.output1.json")
+    ]
+    assert report.statuses["through_inner#u1"].stale_inputs == ("inner.output1",)
+    assert report.statuses["through_stage#u1"].stale_inputs == ("stage.inner.output1",)
+    assert report.statuses["stage.staged#u1"].stale_inputs == ("inner.output1",)
+    # The same result in the other universe is another result, with its own places.
+    assert statuses(report)["inner.output1#u2"] == ("unchanged", "present")
+
+
+def test_a_place_that_is_stale_and_one_that_is_missing_make_the_result_missing(pair: Path) -> None:
+    """The worst of its places', `missing` then `stale`, with what each breaks."""
+    records = pair / ".astra" / "records" / "u1"
+    rewrite(records / "inner.output1.json", lambda v: v["generated_by"].update(commit="0" * 40))
+    report = api.check(pair)
+    stale = report.statuses["inner.output1#u1"]
+    assert (stale.state, codes(report, "inner.output1#u1")) == ("stale", ["STALE_RESULT"])
+    assert stale.record is not None and stale.record.generated_by.commit == "0" * 40
+    (records / "stage.inner.output1.json").unlink()
+    report = api.check(pair)
+    missing = report.statuses["inner.output1#u1"]
+    assert (missing.state, missing.record) == ("missing", None)
+    assert codes(report, "inner.output1#u1") == ["STALE_RESULT", "MISSING_RECORD"]
 
 
 CITING_SUBANALYSIS = SUBANALYSIS + (
@@ -621,9 +643,9 @@ def test_a_declared_analysiss_evidence_citing_a_planned_result_gets_a_status(
     """A check covers the evidence of each declared analysis that cites a result
     the root plans, not only the root's. `subanalysis`'s `output1` cites its results in each of
     the root's universes, as the root's evidence does, and not in `subanalysis`'s own `u1` and
-    `v1`, though `output5`'s pins plan them too; its declarations give none of the names, so it
-    gets the worst of their records. `unread`, which the root doesn't plan, gets no status. A
-    missing one fails the check (`STALE_EVIDENCE`), shown under the file that holds it."""
+    `v1`, though `output5`'s pins plan them too. `unread`, which the root doesn't plan, gets no
+    status. A missing one fails the check (`STALE_EVIDENCE`), located in the file that holds
+    it."""
     files = {
         "astra.yaml": ROOT,
         "data/input1.csv": "1\n",
@@ -633,40 +655,43 @@ def test_a_declared_analysiss_evidence_citing_a_planned_result_gets_a_status(
     top = repository(tmp_path, files)
     build(top)
     cites = ("subanalysis.output1#u1", "subanalysis.output1#u2")
-    found = [
-        (e.location.file, e.artifact, e.cites, e.record_status) for e in api.check(top).evidence
+    report = api.check(top)
+    assert cited(report) == [
+        ("findings.insight1", 0, cites, "unchanged"),
+        ("subanalysis.findings.own", 0, cites, "unchanged"),
     ]
-    assert found == [
-        ("astra.yaml", "subanalysis.output1", cites, "unchanged"),
-        ("subanalysis/astra.yaml", "output1", cites, "unchanged"),
-    ]
+    # `unread` cites nothing planned: the analysis says so, and a check doesn't cover it.
+    (own,) = report.analysis.analyses[1].findings
+    assert [evidence.cites for evidence in own.evidence] == [cites, ()]
     (top / "subanalysis" / ".astra" / "records" / "v1" / "output1.json").unlink()
-    assert [e.record_status for e in api.check(top).evidence] == ["unchanged", "unchanged"]
+    report = api.check(top)
+    assert statuses(report)["subanalysis:output1#v1"] == ("missing", "absent")
+    assert [e.state for e in report.evidence] == ["unchanged", "unchanged"]
     (top / ".astra" / "records" / "u2" / "subanalysis.output1.json").unlink()
     report = api.check(top)
-    assert [e.record_status for e in report.evidence] == ["missing", "missing"]
-    assert [(r.code, r.location.file, r.location.pointer) for r in report.evidence[1].reasons] == [
+    assert [e.state for e in report.evidence] == ["missing", "missing"]
+    assert [(d.code, d.location.file, d.location.pointer) for d in report.evidence[1].why] == [
         ("STALE_EVIDENCE", "subanalysis/astra.yaml", "/findings/own/evidence/0/artifact")
     ]
     result = astra("check", str(top))
     assert result.exit_code == 1
     lines = result.stdout.splitlines()
-    assert lines[lines.index("subanalysis/astra.yaml") + 1].endswith(
-        "`output1` cites `subanalysis.output1#u1`, `subanalysis.output1#u2`, whose record is "
-        "missing"
+    at = lines.index("subanalysis.findings.own evidence 0  missing")
+    assert lines[at + 1].endswith(
+        "error STALE_EVIDENCE the evidence cites `subanalysis.output1#u1`, "
+        "`subanalysis.output1#u2`: one of them is missing"
     )
 
 
-def test_evidence_reads_the_record_of_the_name_along_its_declarations(pair: Path) -> None:
-    """Evidence citing `stage.inner.output1#u1` reads the record of
-    `stage.inner.output1`, not of `inner.output1`."""
-    records = pair / ".astra" / "records" / "u1"
-    (records / "inner.output1.json").unlink()
+def test_evidence_citing_a_result_by_either_name_gets_that_results_status(pair: Path) -> None:
+    """Evidence citing `stage.inner.output1#u1` cites the one result `inner`'s `output1` has in
+    `u1`, whichever of its names the `artifact` gives, and gets its status, the worst of its
+    places'."""
+    assert cited(api.check(pair)) == [("findings.insight1", 0, ("inner.output1#u1",), "unchanged")]
+    (pair / ".astra" / "records" / "u1" / "inner.output1.json").unlink()
     (evidence,) = api.check(pair).evidence
-    assert (evidence.cites, evidence.record_status) == (("stage.inner.output1#u1",), "unchanged")
-    (records / "stage.inner.output1.json").unlink()
-    (evidence,) = api.check(pair).evidence
-    assert evidence.record_status == "missing"
+    assert evidence.state == "missing"
+    assert [d.code for d in evidence.why] == ["STALE_EVIDENCE"]
 
 
 # --- Results from a commit ---
@@ -706,12 +731,13 @@ def test_results_of_an_analysis_from_a_commit_are_read_through_their_records(
     repository(top, {"astra.yaml": FROM_COMMIT % holding})
     report = api.check(top)
     assert statuses(report) == {
-        "out#v1": ("unchanged", "present"),
+        "lib:out#v1": ("unchanged", "present"),
         "result": ("missing", "absent"),
-        "once": ("unchanged", None),
+        "lib:once": ("unchanged", None),
     }
-    assert all(s.committed for c in report.results for s in c.statuses if c.result.from_commit)
-    assert [(e.cites, e.record_status) for e in report.evidence] == [(("once",), "unchanged")]
+    results = {result.id: result for result in report.analysis.results}
+    assert owner(report.analysis, results["lib:out#v1"]).commit == api.Commit(holding)
+    assert cited(report) == [("findings.insight1", 0, ("lib:once",), "unchanged")]
     build(top)
     assert {s[0] for s in statuses(api.check(top)).values()} == {"unchanged"}
 
@@ -730,7 +756,7 @@ def test_a_result_of_an_analysis_from_a_commit_that_a_planned_result_reads_has_i
     """ABSENT_RESULT: only a result of an analysis from a commit that no
     planned result reads is left out. `once` is read by `twice`, itself read through its
     record, so it gets a bytes status from what `B` holds, which hasn't its bytes: `absent`,
-    and ABSENT_RESULT."""
+    and ABSENT_RESULT, at its default place in that commit."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": CHAINED})
     build(top, top / "lib")
     (top / "lib" / "results" / "once.json").unlink()
@@ -738,18 +764,24 @@ def test_a_result_of_an_analysis_from_a_commit_that_a_planned_result_reads_has_i
     root = FROM_COMMIT.split("findings:")[0].replace("lib.out#v1", "lib.twice")
     report = api.check(repository(top, {"astra.yaml": root % holding}))
     assert statuses(report) == {
-        "twice": ("unchanged", "present"),
-        "once": ("unchanged", "absent"),
+        "lib:twice": ("unchanged", "present"),
+        "lib:once": ("unchanged", "absent"),
         "result": ("missing", "absent"),
     }
-    assert reasons(report, "once") == ["ABSENT_RESULT"]
+    (broken,) = report.statuses["lib:once"].why
+    assert (broken.code, broken.location.file, broken.location.commit) == (
+        "ABSENT_RESULT",
+        "lib/results/once.json",
+        holding,
+    )
 
 
 def test_a_result_of_an_analysis_from_a_commit_is_stale_where_its_commit_changed_it(
     tmp_path: Path,
 ) -> None:
     """Unchanged only where nothing STALE_RESULT compares changed between the commit its
-    record names, `A`, and the declared one, `B`; and a result made from it is stale too."""
+    record names, `A`, and the declared one, `B`; and a result made from it is stale too,
+    through the entry that reads it."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
     build(top, top / "lib")
     edited = LIB.replace("python make.py '{decisions.d}'", "python3 make.py '{decisions.d}'")
@@ -757,9 +789,11 @@ def test_a_result_of_an_analysis_from_a_commit_is_stale_where_its_commit_changed
     repository(top, {"astra.yaml": FROM_COMMIT % holding})
     build(top)
     report = api.check(top)
-    assert statuses(report)["out#v1"] == ("stale", "present")
-    assert statuses(report)["once"] == ("unchanged", None)
-    assert messages(report, "result") == ["`out#v1`, which it reads through `lib.out#v1`, is stale"]
+    assert statuses(report)["lib:out#v1"] == ("stale", "present")
+    assert errors(report.statuses["lib:out#v1"]) == ["STALE_RESULT"]
+    assert statuses(report)["lib:once"] == ("unchanged", None)
+    found = report.statuses["result"]
+    assert (found.state, found.why, found.stale_inputs) == ("stale", (), ("lib.out#v1",))
 
 
 def test_results_of_an_analysis_from_another_repository_are_read_from_its_remote(
@@ -775,13 +809,14 @@ def test_results_of_an_analysis_from_another_repository_are_read_from_its_remote
     top = repository(tmp_path / "top", {"astra.yaml": text % holding})
     report = api.check(top)
     assert statuses(report) == {
-        "out#v1": ("unchanged", "present"),
+        "lib:out#v1": ("unchanged", "present"),
         "result": ("missing", "absent"),
-        "once": ("unchanged", None),
+        "lib:once": ("unchanged", None),
     }
-    (checked,) = [c for c in report.results if c.result.names == ("out",)]
-    assert checked.statuses[0].reasons == ()
-    assert (checked.result.owner.commit, report.evidence[0].record_status) == (holding, "unchanged")
+    assert report.statuses["lib:out#v1"].why == ()
+    results = {result.id: result for result in report.analysis.results}
+    assert owner(report.analysis, results["lib:out#v1"]).commit == api.Commit(holding, url)
+    assert report.evidence[0].state == "unchanged"
 
 
 def test_what_a_driver_builds_of_an_analysis_from_a_commit_is_checked_as_its_own(
@@ -800,65 +835,39 @@ def test_what_a_driver_builds_of_an_analysis_from_a_commit_is_checked_as_its_own
     (top / "astra.yaml").write_text((DRIVING % holding).replace("lib.d: a", "lib.d: b"))
     report = api.check(top)
     assert statuses(report)["lib.out#u1"][0] == "stale"
-    assert statuses(report)["out#v1"][0] == "unchanged"
-    assert messages(report, "result#u1") == [
-        "`lib.out#u1`, which it reads through `lib.out`, is stale"
-    ]
+    assert errors(report.statuses["lib.out#u1"]) == ["STALE_RESULT"]
+    assert statuses(report)["lib:out#v1"][0] == "unchanged"
+    found = report.statuses["result#u1"]
+    assert (found.state, errors(found), found.stale_inputs) == ("stale", [], ("lib.out",))
 
 
-# --- committed, and --at ---
-
-
-def test_committed_says_whether_git_has_the_record_as_it_is(worked: Path) -> None:
-    """The record at its place in HEAD's tree, byte for byte."""
-    report = api.check(worked)
-    assert {s.committed for c in report.results for s in c.statuses} == {False}
-    git(worked, "add", "--all")
-    git(worked, "commit", "--quiet", "--message", "records")
-    report = api.check(worked)
-    assert {s.committed for c in report.results for s in c.statuses} == {True}
-    rewrite(worked / ".astra" / "records" / "output2.json", lambda value: value.update(size=1))
-    found = {s.place.address: s.committed for c in api.check(worked).results for s in c.statuses}
-    assert found == {"output1#u1": True, "output1#u2": True, "output2": False}
+# --- --at ---
 
 
 def test_at_a_commit_the_stack_records_and_bytes_are_read_there(worked: Path) -> None:
     """`at=<commit>` checks the stack as it is at that commit, with its records and
     bytes read there: not yet committed, they aren't there."""
-    head = git(worked, "rev-parse", "HEAD").strip()
     report = api.check(worked, at="HEAD")
-    assert report.at == head
     assert {s[0] for s in statuses(report).values()} == {"missing"}
     git(worked, "add", "--all")
     git(worked, "commit", "--quiet", "--message", "records")
+    head = git(worked, "rev-parse", "HEAD~1").strip()[:12]
     text = WORKED_EXAMPLE.replace("decisions: {decision1: a}", "decisions: {decision1: b}")
     (worked / "astra.yaml").write_text(text)
-    assert statuses(api.check(worked, at="HEAD")) == UNCHANGED
+    report = api.check(worked, at="HEAD")
+    assert statuses(report) == UNCHANGED
+    # The analysis is the one that commit holds, whose `u1` still selects `a`.
+    assert report.analysis.analyses[0].universes[0].selection == {"decisions.decision1": "a"}
     report = api.check(worked)
     assert statuses(report)["output1#u1"][0] == "stale"
-    assert changes(report, "output1#u1") == [("selection", None)]
+    assert messages(report, "output1#u1") == [
+        f"`decision1` selects `b` in `u1`, where it selected `a` at {head}"
+    ]
     with pytest.raises(api.RequestError):
         api.check(worked, at="nowhere")
 
 
-# --- api.check narrowing, and the shape ---
-
-
-def test_universes_and_outputs_only_narrow_the_report(worked: Path) -> None:
-    """The results built in the universes asked for and of the outputs asked for; the evidence
-    isn't narrowed, as a check covers the evidence of the analysis it is run on."""
-    report = api.check(worked, universes=["u1"])
-    assert list(statuses(report)) == ["output1#u1"]
-    assert [e.artifact for e in report.evidence] == ["output2"]
-    report = api.check(worked, outputs=["output2"])
-    assert list(statuses(report)) == ["output2"]
-    assert [e.artifact for e in report.evidence] == ["output2"]
-    with pytest.raises(api.RequestError, match="no universe `u3`: its universes are u1, u2"):
-        api.check(worked, universes=["u3"])
-    with pytest.raises(api.RequestError, match="`output3` names no output"):
-        api.check(worked, outputs=["output3"])
-    with pytest.raises(api.RequestError, match="no planned result in the universes asked for"):
-        api.check(worked, universes=["u1"], outputs=["output2"])
+# --- An analysis that breaks a MUST has no statuses ---
 
 
 UNDETERMINED = """\
@@ -883,211 +892,108 @@ INVALID_WORKED = WORKED_EXAMPLE.replace("\nuniverses:", UNDETERMINED + "\nuniver
 )
 """The worked example, broken by `UNDETERMINED`, with evidence citing `reader` too."""
 
-
-def test_an_invalid_analysis_gets_statuses_where_planning_is_determined(worked: Path) -> None:
-    """The report holds the validation errors, and every result whose planning is determined
-    gets its statuses, as does the evidence citing only such results. `broken` reads what names
-    nothing, and `reader` reads `broken`, so neither gets a status, nor does the evidence citing
-    `reader`; the rest are as they were. The check fails."""
-    (worked / "astra.yaml").write_text(INVALID_WORKED)
-    report = api.check(worked)
-    assert [(d.code, d.location.pointer) for d in report.errors] == [
-        ("UNRESOLVED_ADDRESS", "/outputs/broken/inputs/0")
-    ]
-    assert statuses(report) == UNCHANGED
-    assert [(e.artifact, e.record_status) for e in report.evidence] == [("output2", "unchanged")]
-    assert not report.ok
-    assert report.resolved is None  # an analysis that breaks a MUST resolves to nothing
-
-
-def test_results_on_a_cycle_get_no_statuses(tmp_path: Path) -> None:
-    """A result that reads itself back, through another
-    (OUTPUT_CYCLE), has no determined planning, nor has the other; the analysis's other result
-    gets its statuses."""
-    cycle = "".join(
-        f"  {id_}:\n    type: metric\n    format: json\n    inputs: [{reads}]\n"
-        "    recipe:\n      command: python make.py '{inputs}' '{output}'\n"
-        for id_, reads in (("first", "second"), ("second", "first"))
-    )
-    report = api.check(repository(tmp_path, {"astra.yaml": MINIMAL + cycle}))
-    assert [d.code for d in report.errors] == ["OUTPUT_CYCLE", "OUTPUT_CYCLE"]
-    assert statuses(report) == {"result": ("missing", "absent")}
-
-
-def _made(id_: str, field: str = "", reads: str = "") -> str:
-    """An output of `astra.yaml`, with `field` listing `reads` where given."""
-    listed = f"    {field}: [{reads}]\n" if field else ""
-    return (
-        f"  {id_}:\n    type: metric\n    format: json\n{listed}"
-        "    recipe:\n      command: python make.py '{output}'\n"
-    )
-
-
-DECIDING = """\
-decisions:
-  decision1:
-    options:
-      a: {}
-      b: {}
-universes:
-  u1: {decisions: {decision1: a}}
-  u2: {decisions: {decision1: b}}
-"""
-"""Two universes, selecting `a` and `b` for `decision1`."""
-
-UNSET = DECIDING.replace(
-    "universes:", "  decision2:\n    options:\n      c: {}\n      d: {}\nuniverses:"
-).replace("{decision1: a}", "{decision1: a, decision2: c}")
-"""`DECIDING` with `decision2` too, which `u1` sets and `u2` doesn't."""
+CYCLE = MINIMAL + "".join(
+    f"  {id_}:\n    type: metric\n    format: json\n    inputs: [{reads}]\n"
+    "    recipe:\n      command: python make.py '{inputs}' '{output}'\n"
+    for id_, reads in (("first", "second"), ("second", "first"))
+)
+"""Two outputs that read each other, beside `result`."""
 
 
 @pytest.mark.parametrize(
-    ("text", "artifact", "errors"),
+    ("text", "broken"),
     [
+        pytest.param(INVALID_WORKED, ["UNRESOLVED_ADDRESS"], id="an address that names nothing"),
+        pytest.param(CYCLE, ["OUTPUT_CYCLE", "OUTPUT_CYCLE"], id="two outputs on a cycle"),
         pytest.param(
-            _made("first", "inputs", "second") + _made("second", "inputs", "first"),
-            "first",
-            ["OUTPUT_CYCLE", "OUTPUT_CYCLE"],
-            id="an output on a cycle",
-        ),
-        pytest.param(
-            _made("first", "inputs", "sw")
-            + "  sw:\n    switch: decision1\n    cases: {a: first, b: first}\n"
-            + DECIDING,
-            "sw",
-            ["OUTPUT_CYCLE"] * 3,
-            id="a switch on a cycle",
-        ),
-        pytest.param(
-            _made("per", "decisions", "decision1")
-            + "  sw:\n    switch: decision2\n    cases: {c: per, d: per}\n"
-            + UNSET,
-            "sw",
-            ["MISSING_DECISION"],
-            id="a switch whose decision a universe doesn't set",
-        ),
-        pytest.param(
-            _made("per", "decisions", "decision1")
-            + "  sw:\n    switch: decision1\n    cases: {a: per, b: nothing}\n"
-            + DECIDING,
-            "sw",
-            ["UNRESOLVED_ADDRESS"],
-            id="a switch whose case names nothing",
-        ),
-        pytest.param(
-            _made("per", "decisions", "decision1") + DECIDING,
-            "per#u9",
-            ["UNKNOWN_PIN_UNIVERSE"],
-            id="a pin that names no universe",
+            MINIMAL.replace("type: metric", "type: plot"),
+            ["INVALID_VALUE"],
+            id="a file that isn't a valid document",
         ),
     ],
 )
-def test_evidence_citing_what_is_undetermined_gets_no_status(
-    tmp_path: Path, text: str, artifact: str, errors: list[str]
+def test_an_analysis_that_breaks_a_must_isnt_checked(
+    worked: Path, text: str, broken: list[str]
 ) -> None:
-    """Only evidence citing results whose planning is determined gets a status. Evidence that
-    cites, once or in one of the root's universes, an output on a cycle, a switch undetermined
-    there, as one on a cycle is, or whose case names nothing, or that has a pin that names no
-    universe, gets none, and so isn't `missing`: `STALE_EVIDENCE` isn't reported for it, but the
-    cause is."""
-    citing = "findings:\n  insight1:\n    claim: It is cited.\n    evidence:\n"
-    text = MINIMAL + text + citing + f"      - artifact: {artifact}\n"
-    report = api.check(repository(tmp_path, {"astra.yaml": text}))
-    assert sorted(d.code for d in report.errors) == sorted(errors)
-    assert (report.evidence, report.ok) == ((), False)
+    """An analysis that breaks a `MUST` resolves to nothing, so it has no planned results to
+    give statuses to, not even those the error leaves alone: `check` raises, with the
+    validator's report, which says where."""
+    (worked / "astra.yaml").write_text(text)
+    with pytest.raises(api.InvalidAnalysisError) as raised:
+        api.check(worked)
+    report = raised.value.report
+    assert not report.valid
+    assert [d.code for d in report.diagnostics if d.level == "error"] == broken
 
 
-def test_an_analysis_with_no_stack_gets_no_statuses(tmp_path: Path) -> None:
-    """A root whose file isn't a valid document is undetermined,
-    so no result's planning is: the report holds only the errors."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL.replace("type: metric", "type: plot")})
-    report = api.check(top)
-    assert [d.code for d in report.errors] == ["INVALID_VALUE"]
-    assert (report.results, report.evidence, report.ok) == ((), (), False)
-    assert report.resolved is None
+# --- The report as JSON ---
 
 
-def test_the_report_as_astra_check_report_2(worked: Path) -> None:
-    """Each result, each after what it reads, with each place's statuses, `committed`, its
-    reasons, each with what changed, and what the record found there says (`recorded`), which
-    names the environment and the runner that says what it holds; then the evidence."""
+def test_the_report_as_json_holds_the_analysis_and_each_status_by_result_id(worked: Path) -> None:
+    """The analysis as it resolved, each result's status by its id, in the results' order, with
+    what it breaks and what its record says, which names the environment and the runner that
+    says what it holds; then the evidence. A field with no value is left out, never null."""
     (worked / "results" / "output2.csv").unlink()
-    shape = api.check(worked).to_json()
-    assert (shape["shape"], shape["root"], shape["at"]) == (
-        "astra-check-report/2",
-        "astra.yaml",
-        "worktree",
-    )
+    report = api.check(worked)
+    shape = report.to_json()
+    assert json.loads(json.dumps(shape)) == shape
+    assert list(shape) == ["analysis", "statuses", "evidence"]
+    assert shape["analysis"] == report.analysis.to_json()
+    assert list(shape["statuses"]) == ["output1#u1", "output1#u2", "output2"]
     record = json.loads((worked / ".astra" / "records" / "output2.json").read_text("utf-8"))
-    assert record["generated_by"]["environment"] == {"iri": ENVIRONMENT}
-    assert shape["results"][2] == {
-        "names": ["output2"],
-        "owner": {"folder": "", "commit": None},
-        "output": {"analysis": {"folder": "", "commit": None}, "kind": "output", "id": "output2"},
-        "universe": None,
-        "places": [
+    assert record["generated_by"]["environment"] == {"iri": ENVIRONMENT.iri}
+    assert shape["statuses"]["output2"] == {
+        "state": "unchanged",
+        "bytes": "absent",
+        "record": record,
+        "why": [
             {
-                "name": "output2",
-                "address": "output2",
-                "record": ".astra/records/output2.json",
-                "bytes": "results/output2.csv",
-                "record_status": "unchanged",
-                "bytes_status": "absent",
-                "committed": False,
-                "reasons": [
-                    {
-                        "code": "ABSENT_RESULT",
-                        "level": "warning",
-                        "message": "no file is at results/output2.csv, the result's default place",
-                        "location": {
-                            "file": "results/output2.csv",
-                            "pointer": "",
-                            "line": None,
-                            "column": None,
-                            "key": None,
-                            "commit": None,
-                            "url": None,
-                        },
-                        "breaks": None,
-                        "change": None,
-                        "entry": None,
-                    }
-                ],
-                "recorded": record,
+                "code": "ABSENT_RESULT",
+                "level": "warning",
+                "message": "no file is at results/output2.csv, the result's default place",
+                "location": {"file": "results/output2.csv", "pointer": ""},
+                "related": [],
             }
         ],
+        "stale_inputs": [],
     }
-    assert all("environment" not in place for r in shape["results"] for place in r["places"])
-    assert shape["errors"] == []
-    (evidence,) = shape["evidence"]
-    assert {key: evidence[key] for key in ("artifact", "cites", "record_status", "reasons")} == {
-        "artifact": "output2",
-        "cites": ["output2"],
-        "record_status": "unchanged",
-        "reasons": [],
-    }
-    assert evidence["location"]["pointer"] == "/findings/insight1/evidence/0/artifact"
+    assert shape["evidence"] == [
+        {"insight": "findings.insight1", "index": 0, "state": "unchanged", "why": []}
+    ]
+    assert "null" not in json.dumps(shape)
 
 
-def test_the_shape_says_what_changed_and_what_the_record_at_each_place_says(
+def test_the_json_says_what_a_result_breaks_and_which_entries_read_what_isnt_unchanged(
     worked: Path,
 ) -> None:
-    """A stale result's reasons carry `change` and `entry`. A place keeps `record`, the path of
-    its record's file, and gives what the record there says as `recorded`: null where there is
-    none that is the result's."""
+    """A stale result's `why` holds what it breaks itself, at its record, and `stale_inputs`
+    the entries that read a result that isn't unchanged. A status gives what its result's
+    record says as `record`, left out where there is none that is the result's."""
     (worked / "data" / "input1.csv").write_text("2\n")
+    shape = api.check(worked).to_json()["statuses"]
+    one = shape["output1#u1"]
+    assert (one["state"], one["stale_inputs"]) == ("stale", [])
+    assert [(d["code"], d["level"], d["location"]["file"]) for d in one["why"]] == [
+        ("STALE_RESULT", "error", ".astra/records/u1/output1.json")
+    ]
+    assert one["record"]["address"] == "output1#u1"
+    compared = shape["output2"]
+    assert (compared["state"], compared["why"]) == ("stale", [])
+    assert compared["stale_inputs"] == ["output1#u1", "output1#u2"]
+    assert [item["entry"] for item in compared["record"]["generated_by"]["inputs"]] == [
+        "output1#u1",
+        "output1#u2",
+    ]
     (worked / ".astra" / "records" / "output2.json").unlink()
     shape = api.check(worked).to_json()
-    one, _, compared = shape["results"]
-    assert [(r["code"], r["change"], r["entry"]) for r in one["places"][0]["reasons"]] == [
-        ("STALE_RESULT", "input", "input1")
-    ]
-    assert one["places"][0]["record"] == ".astra/records/u1/output1.json"
-    assert one["places"][0]["recorded"]["address"] == "output1#u1"
-    assert (compared["places"][0]["record_status"], compared["places"][0]["recorded"]) == (
+    assert shape["statuses"]["output2"]["state"] == "missing"
+    assert "record" not in shape["statuses"]["output2"]
+    (evidence,) = shape["evidence"]
+    assert (evidence["state"], [d["code"] for d in evidence["why"]]) == (
         "missing",
-        None,
+        ["STALE_EVIDENCE"],
     )
+    assert evidence["why"][0]["location"]["pointer"] == "/findings/insight1/evidence/0/artifact"
 
 
 # --- astra check ---
@@ -1097,54 +1003,62 @@ def test_astra_check_exits_0_when_every_result_is_unchanged(worked: Path) -> Non
     result = astra("check", str(worked))
     assert result.exit_code == 0, result.output
     lines = result.stdout.splitlines()
-    assert (
-        lines[0] == ".astra/records/u1/output1.json  output1#u1  unchanged  present  not committed"
-    )
-    # Under each place with a record, the environment it names and the runner that recorded
+    assert lines[0] == "output1#u1  unchanged  present  .astra/records/u1/output1.json"
+    # Under each result with a record, the environment it names and the runner that recorded
     # it, which is the one to say what that environment holds.
-    assert lines[1] == f"  made in {ENVIRONMENT} by {RUNNER.id} {RUNNER.version}"
-    assert lines[6] == "astra.yaml"
-    assert lines[7].endswith("unchanged `output2`")
-    assert lines[-1] == (
-        "astra.yaml: 3 place(s) of planned results, 3 unchanged, 0 stale, 0 missing; 0 absent"
-    )
+    assert lines[1] == f"  made in {ENVIRONMENT.iri} by {RUNNER.id} {RUNNER.version}"
+    assert lines[6] == "findings.insight1 evidence 0  unchanged"
+    assert lines[-1] == "3 planned result(s), 3 unchanged, 0 stale, 0 missing; 0 absent"
 
 
 def test_astra_check_exits_1_when_one_isnt(worked: Path) -> None:
+    """Under a result, what it breaks itself, then each entry that reads a result that isn't
+    what it was made from."""
     (worked / "data" / "input1.csv").write_text("2\n")
     result = astra("check", str(worked))
     assert result.exit_code == 1
     assert "  error STALE_RESULT the content of `input1`" in result.stdout
+    lines = result.stdout.splitlines()
+    at = lines.index("output2  stale  present  .astra/records/output2.json")
+    assert lines[at + 1 : at + 3] == [
+        "  `output1#u1` reads `output1#u1`, which isn't what it was made from",
+        "  `output1#u2` reads `output1#u2`, which isn't what it was made from",
+    ]
+    assert lines[-1] == "3 planned result(s), 0 unchanged, 3 stale, 0 missing; 0 absent"
     shape = json.loads(astra("check", str(worked), "--json").stdout)
-    assert [p["record_status"] for r in shape["results"] for p in r["places"]] == ["stale"] * 3
+    assert [status["state"] for status in shape["statuses"].values()] == ["stale"] * 3
+    assert shape == api.check(worked).to_json()
 
 
 def test_astra_check_names_the_environment_only_of_a_record_that_is_the_results(
     worked: Path,
 ) -> None:
-    """A place with no record, or one that breaks a rule, has no environment to name."""
+    """A result with no record, or one that breaks a rule, has no environment to name."""
     (worked / ".astra" / "records" / "output2.json").unlink()
     (worked / ".astra" / "records" / "u2" / "output1.json").write_text("{")
     result = astra("check", str(worked))
     assert result.exit_code == 1
     assert result.stdout.count("  made in ") == 1
     lines = result.stdout.splitlines()
-    at = lines.index(f"  made in {ENVIRONMENT} by {RUNNER.id} {RUNNER.version}")
-    assert lines[at - 1].startswith(".astra/records/u1/output1.json  output1#u1  unchanged")
+    at = lines.index(f"  made in {ENVIRONMENT.iri} by {RUNNER.id} {RUNNER.version}")
+    assert lines[at - 1].startswith("output1#u1  unchanged")
+    broken = lines[lines.index("output1#u2  missing  absent  .astra/records/u2/output1.json") + 1]
+    assert broken.startswith("  1:2 error INVALID_RECORD ") and broken.endswith(" (INVALID_SYNTAX)")
+    assert lines[-1] == "3 planned result(s), 1 unchanged, 0 stale, 2 missing; 2 absent"
 
 
 def test_astra_check_of_an_invalid_analysis_shows_why_and_exits_1(worked: Path) -> None:
-    """The errors first, as `astra validate` shows them, then the statuses they
-    leave determined; with `--json`, its shape, which holds the errors."""
+    """The errors, as `astra validate` shows them, and no status; with `--json`, the
+    validator's report."""
     (worked / "astra.yaml").write_text(INVALID_WORKED)
     result = astra("check", str(worked))
     assert result.exit_code == 1
-    assert result.stdout.index("UNRESOLVED_ADDRESS") < result.stdout.index("output2  unchanged")
-    assert "astra.yaml: invalid, 1 error(s), so only the results it leaves" in result.stdout
+    assert "UNRESOLVED_ADDRESS" in result.stdout
+    assert "planned result(s)" not in result.stdout
+    assert result.stdout == astra("validate", str(worked)).stdout
     shape = json.loads(astra("check", str(worked), "--json").stdout)
-    assert shape["shape"] == "astra-check-report/2"
-    assert [d["code"] for d in shape["errors"]] == ["UNRESOLVED_ADDRESS"]
-    assert len(shape["results"]) == 3
+    assert (shape["shape"], shape["valid"]) == ("astra-validation-report/1", False)
+    assert [d["code"] for d in shape["diagnostics"]] == ["UNRESOLVED_ADDRESS"]
 
 
 def test_astra_check_exits_2_where_it_cant_check(tmp_path: Path, worked: Path) -> None:
@@ -1188,12 +1102,15 @@ def test_every_check_code_has_a_case() -> None:
 
 @pytest.mark.parametrize("code", sorted(BREAKING))
 def test_the_checker_reports_each_code(worked: Path, code: str) -> None:
+    """Each at the level its rule gives: a `MUST` an error, a `SHOULD` a warning."""
     edit = BREAKING[code]
     edit(worked)
     report = api.check(worked)
-    found = {r.code for c in report.results for s in c.statuses for r in s.reasons}
-    found |= {r.code for evidence in report.evidence for r in evidence.reasons}
-    assert code in found, found
+    found = [broken for status in report.statuses.values() for broken in status.why]
+    found += [broken for evidence in report.evidence for broken in evidence.why]
+    assert code in {broken.code for broken in found}, found
+    catalogue = Catalogue.load()
+    assert all(broken.level == catalogue.level(broken.code) for broken in found)
 
 
 # --- Edits of the worked example, the records committed ---
@@ -1224,14 +1141,14 @@ def _select(universe: str, option: str) -> Callable[[Path], object]:
     return lambda top: (top / "astra.yaml").write_text(text)
 
 
-EDITS: Mapping[str, tuple[Callable[[Path], object], tuple[str, str, str], Mapping[str, str]]] = {
+Edit = tuple[Callable[[Path], object], tuple[str, str, str], Mapping[str, str], tuple[str, ...]]
+
+EDITS: Mapping[str, Edit] = {
     "`u1` selects another option for `decision1`": (
         _select("u1", "b"),
         ("stale", "unchanged", "stale"),
-        {
-            "output1#u1": "`decision1` selects `b` in `u1`, where it selected `a` at {commit}",
-            "output2": "`output1#u1`, which it reads, is stale",
-        },
+        {"output1#u1": "`decision1` selects `b` in `u1`, where it selected `a` at {commit}"},
+        ("output1#u1",),
     ),
     "`insight1`'s claim is reworded": (
         lambda top: (top / "astra.yaml").write_text(
@@ -1239,36 +1156,48 @@ EDITS: Mapping[str, tuple[Callable[[Path], object], tuple[str, str, str], Mappin
         ),
         ("unchanged", "unchanged", "unchanged"),
         {},
+        (),
     ),
     "the script that `output1`'s recipe runs is edited": (
         lambda top: (top / "src/output1.py").write_text("print('edited')\n"),
         ("unchanged", "unchanged", "unchanged"),
         {},
+        (),
     ),
     "`data/input1.csv` is changed": (
         lambda top: (top / "data/input1.csv").write_text("2\n"),
         ("stale", "stale", "stale"),
-        {"output1#u1": "the content of `input1`, data/input1.csv, isn't what the recipe read"},
+        {
+            "output1#u1": "the content of `input1`, data/input1.csv, isn't what the recipe read",
+            "output1#u2": "the content of `input1`, data/input1.csv, isn't what the recipe read",
+        },
+        ("output1#u1", "output1#u2"),
     ),
     "`u2` selects `a`": (
         _select("u2", "a"),
         ("unchanged", "stale", "stale"),
         {"output1#u2": "`decision1` selects `a` in `u2`, where it selected `b` at {commit}"},
+        ("output1#u2",),
     ),
 }
-"""Each edit, the record statuses it leaves `output1` in `u1`, `output1` in `u2` and `output2`
-with, and what the checker says changed at some of their places, `{commit}` being the commit the
-records name."""
+"""Each edit, the statuses it leaves `output1` in `u1`, `output1` in `u2` and `output2` with,
+what the checker says each result that breaks STALE_RESULT itself changed, `{commit}` being the
+commit the records name, and the entries through which `output2`, which breaks nothing itself,
+reads a result that isn't unchanged."""
 
 
 @pytest.mark.parametrize("edit", EDITS)
 def test_each_edit_gives_its_effect(committed: Path, tmp_path: Path, edit: str) -> None:
     top = Path(shutil.copytree(committed, tmp_path / "top", symlinks=True))
     assert statuses(api.check(top)) == UNCHANGED
-    change, effect, said = EDITS[edit]
+    change, effect, said, through = EDITS[edit]
     change(top)
     report = api.check(top)
     assert tuple(s[0] for s in statuses(report).values()) == effect
     commit = git(top, "rev-parse", "HEAD~1").strip()[:12]
-    for address, message in said.items():
-        assert messages(report, address) == [message.format(commit=commit)]
+    assert {id_: messages(report, id_) for id_ in report.statuses} == {
+        id_: [said[id_].format(commit=commit)] if id_ in said else [] for id_ in report.statuses
+    }
+    assert report.statuses["output1#u1"].stale_inputs == ()
+    assert report.statuses["output1#u2"].stale_inputs == ()
+    assert report.statuses["output2"].stale_inputs == through

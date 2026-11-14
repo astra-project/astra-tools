@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from astra import api
+from astra.sources.reader import worktree
+from astra.stack import bind
 from tests.conftest import MINIMAL, repository
 
 
@@ -66,7 +68,7 @@ def test_an_entry_naming_a_shared_id_names_nothing(tmp_path: Path) -> None:
     top = repository(tmp_path, files)
     report = api.validate(top)
     assert [d.code for d in report.diagnostics] == ["AMBIGUOUS_ID"]
-    stack = api.bind(top).stack
+    stack = bind(*worktree(top))[0]
     assert stack is not None
     entries = [r for r in stack.resolutions if r.field == "inputs"]
     assert [(r.written, r.element) for r in entries] == [("sub.data1", None), ("data1", None)]

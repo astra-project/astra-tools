@@ -1,5 +1,5 @@
-"""`astra check [PATH] [--at REV] [--json]`: each planned result's record and bytes statuses,
-and the evidence's."""
+"""`astra check [PATH] [--at REV] [--json]`: each planned result's status, and the
+evidence's."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from astra.cli import FAILED, environment, write_json
+from astra.cli import FAILED, environment, write_json, write_report
 
 
 @click.command("check")
@@ -22,19 +22,21 @@ from astra.cli import FAILED, environment, write_json
 def command(path: Path | None, at: str | None, as_json: bool) -> None:
     """Check the records and bytes of the planned results of the analysis in PATH.
 
-    PATH is the analysis's folder, the current one by default. Each planned result is shown at
-    each of its places with its record's status, unchanged, stale or missing, and its bytes',
-    present or absent, and why; then each evidence with the status of what it cites.
-    Where the analysis breaks a MUST, its errors come first, as `astra validate` shows them,
-    and only the results they leave determined are shown. Exits 0 when the analysis is valid
-    and every planned result and evidence is unchanged, 1 when one isn't or the analysis breaks
-    a MUST, and 2 where it can't be read or REV names no commit.
+    PATH is the analysis's folder, the current one by default. Each planned result is shown
+    with its record's status, unchanged, stale or missing, and its bytes', present or absent,
+    and why; then each evidence with the status of what it cites. With --json, the report holds
+    the analysis as it resolved too. Exits 0 when every planned result and evidence is
+    unchanged, 1 when one isn't or the analysis breaks a MUST, which is shown as
+    `astra validate` shows it, and 2 where it can't be read or REV names no commit.
     """
     from astra import api
 
     with environment():
         try:
             report = api.check(path, at=at)
+        except api.InvalidAnalysisError as error:
+            write_report(error.report, as_json)
+            raise click.exceptions.Exit(FAILED) from None
         except api.RequestError as error:
             raise click.BadParameter(str(error), param_hint="--at") from None
     if as_json:
@@ -43,5 +45,7 @@ def command(path: Path | None, at: str | None, as_json: bool) -> None:
         from astra.cli.text.check import show
 
         show(report)
-    if not report.ok:
+    states = [status.state for status in report.statuses.values()]
+    states += [evidence.state for evidence in report.evidence]
+    if any(state != "unchanged" for state in states):
         raise click.exceptions.Exit(FAILED)

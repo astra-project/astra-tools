@@ -84,13 +84,9 @@ def fill(
     `{decisions.<entry>}` by what `decisions` gives for it, `{inputs}` by everything `inputs`
     gives, in its order, separated by spaces, and `{output}` by `output`.
 
-    The grammar alone: what a path is written as, relative to the folder the recipe runs in or
-    absolute, in which checkout, is the caller's to say. A runner gives, for each entry of the
-    output's `inputs` in their order, the path it has what the entry reads at, the option each
-    entry of its `decisions` selects, as a planned result gives them, and the path the recipe
-    writes its result to. An entry that selects nothing, as only on a stack that breaks a
-    `MUST`, fills in nothing. Raises KeyError, naming the placeholder, for one neither gives, as
-    only where the command breaks `UNDECLARED_TEMPLATE_REF` or an entry is left out."""
+    The grammar alone: which paths and options fill a command is `resolve`'s to say. Raises
+    KeyError, naming the placeholder, for one neither gives, as only where the command breaks
+    `UNDECLARED_TEMPLATE_REF`."""
 
     def filled(match: re.Match[str]) -> str:
         text, placeholder = match[0], match[1]

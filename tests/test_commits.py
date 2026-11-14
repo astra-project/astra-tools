@@ -15,6 +15,11 @@ from click.testing import CliRunner
 
 from astra import api
 from astra.cli import main
+from astra.history import History
+from astra.resolve import read
+from astra.sources.reader import worktree
+from astra.sources.remote import Remotes
+from astra.stack import bind
 from tests.conftest import MINIMAL, git, repository
 
 NOWHERE = "file:///nowhere/at/all.git"
@@ -329,7 +334,7 @@ def test_a_commit_kept_from_an_earlier_fetch_counts_as_got(tmp_path: Path) -> No
 
 
 def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path) -> None:
-    """`offline`, `resolve`, `check`, `bind` and `history` fetch nothing, as `validate`: a
+    """`offline`, `resolve`, `check`, binding and the history fetch nothing, as `validate`: a
     remote's commit that was never got leaves the analysis invalid, and one kept from an earlier
     fetch is read, though the remote is gone."""
     remote = repository(tmp_path / "remote", {"astra.yaml": MINIMAL})
@@ -339,21 +344,27 @@ def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path
     with pytest.raises(api.InvalidAnalysisError):
         api.resolve(root, offline=True)
     with pytest.raises(api.InvalidAnalysisError):
-        api.history(root, offline=True)
-    assert [d.code for d in api.check(root, offline=True).errors] == ["REMOTE_UNREACHABLE"]
-    unreached = api.bind(root, offline=True).stack
+        read(root, Remotes(offline=True))  # what `astra history` reads
+    with pytest.raises(api.InvalidAnalysisError) as raised:
+        api.check(root, offline=True)
+    errors = [d.code for d in raised.value.report.diagnostics if d.level == "error"]
+    assert errors == ["REMOTE_UNREACHABLE"]
+    unreached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
     assert unreached is not None and len(list(unreached.determined())) == 1
     assert len(api.resolve(root).results) == 2  # fetched
     remote.rename(tmp_path / "gone")
     resolved = api.resolve(root, offline=True)
-    assert [(r.places[0].address, r.from_commit) for r in resolved.results] == [
-        ("result", True),
-        ("result", False),
+    # `up`'s result is a result from a commit, and the root's reads it there.
+    assert [(r.id, r.places[0].address, r.command) for r in resolved.results] == [
+        ("up:result", "result", None),
+        ("result", "result", None),
     ]
-    assert api.check(root, offline=True).errors == ()
-    reached = api.bind(root, offline=True).stack
+    assert resolved.analyses[1].commit == api.Commit(head, remote.as_uri())
+    assert list(api.check(root, offline=True).statuses) == ["up:result", "result"]
+    reached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
     assert reached is not None and len(list(reached.determined())) == 2
-    assert api.history(root, offline=True).timeline("result") == ()
+    offline = Remotes(offline=True)
+    assert History(read(root, offline), offline).timeline("result") == ()
 
 
 def test_a_commit_further_in_is_reported_on_the_outermost_declaration(tmp_path: Path) -> None:

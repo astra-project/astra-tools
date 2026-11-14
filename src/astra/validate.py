@@ -18,7 +18,7 @@ from astra.diagnostics import Catalogue, Diagnostic, Location
 from astra.rules.context import Context
 from astra.sources.reader import Reader
 from astra.sources.remote import Remotes
-from astra.stack import Stack, bind
+from astra.stack import bind
 
 SHAPE = "astra-validation-report/1"
 
@@ -51,6 +51,15 @@ class ValidationReport:
         }
 
 
+class InvalidAnalysisError(Exception):
+    """The analysis breaks a `MUST`, so it resolves to nothing and has no statuses: `report`
+    says where."""
+
+    def __init__(self, report: ValidationReport) -> None:
+        super().__init__(f"{report.root} breaks a MUST: `astra validate` says where")
+        self.report = report
+
+
 def _order(location: Location) -> tuple[bool, str, str, int, int]:
     """The working tree's files first, then each commit's, each file in order of place."""
     commit = location.commit
@@ -73,13 +82,15 @@ def validate(reader: Reader, root: str, remotes: Remotes | None = None) -> Valid
 
 def validated(
     reader: Reader, root: str, remotes: Remotes | None = None
-) -> tuple[ValidationReport, Stack | None]:
-    """The report, as `validate` gives it, and the stack it judged: None where the root's file
-    isn't a valid document, or it is in no repository. A valid report always has its stack."""
+) -> tuple[ValidationReport, Context | None]:
+    """The report, as `validate` gives it, and the stack it judged, with what the rules worked
+    out of it: None where the root's file isn't a valid document, or it is in no repository. A
+    valid report always has its stack."""
     file = posixpath.join(root, "astra.yaml")
     catalogue = Catalogue.load()
-    bound = bind(reader, root, catalogue, remotes)
-    found = list(bound.diagnostics)
+    stack, diagnostics = bind(reader, root, catalogue, remotes)
+    found = list(diagnostics)
+    context = None
     if reader.repo is None:
         # NOT_IN_REPOSITORY is about the folder, not the file, so it is reported beside the
         # parse and schema rules and UNSUPPORTED_SPEC_VERSION.
@@ -89,10 +100,11 @@ def validated(
         )
         location = Location(file, "", None, None)
         found.append(catalogue.diagnostic("NOT_IN_REPOSITORY", message, location))
-    elif bound.stack is not None:
-        found.extend(rules.check(Context(bound.stack, catalogue)))
+    elif stack is not None:
+        context = Context(stack, catalogue)
+        found.extend(rules.check(context))
     # A MUST broken in an analysis from a commit can be found both under this root and as that
     # analysis's own root (`rules.commits`): it is reported once.
     unique = dict.fromkeys(found)
-    diagnostics = sorted(unique, key=lambda d: _order(d.location) + (d.code,))
-    return ValidationReport(file, tuple(diagnostics), unchecked(catalogue)), bound.stack
+    ordered = sorted(unique, key=lambda d: _order(d.location) + (d.code,))
+    return ValidationReport(file, tuple(ordered), unchecked(catalogue)), context

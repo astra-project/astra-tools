@@ -220,16 +220,6 @@ class Stack:
 
 
 @dataclass(frozen=True)
-class Bound:
-    """What binding gives: the stack, and the parse and schema diagnostics of its files. The
-    stack is None where the root's file isn't a valid document, and where the root is in no
-    repository, whose declarations aren't followed."""
-
-    stack: Stack | None
-    diagnostics: tuple[Diagnostic, ...]
-
-
-@dataclass(frozen=True)
 class _Place:
     """Where an analysis is read: its identity, its reader, and the remote its commit was got
     from, if any."""
@@ -241,10 +231,12 @@ class _Place:
 
 def bind(
     reader: Reader, root: str, catalogue: Catalogue | None = None, remotes: Remotes | None = None
-) -> Bound:
-    """The stack whose root is the analysis in the folder `root` of `reader` ("" for its top).
-    Commits are got from remotes through `remotes`. Raises OSError where a file that is there
-    can't be read."""
+) -> tuple[Stack | None, tuple[Diagnostic, ...]]:
+    """The stack whose root is the analysis in the folder `root` of `reader` ("" for its top),
+    and the parse and schema diagnostics of its files. The stack is None where the root's file
+    isn't a valid document, and where the root is in no repository, whose declarations aren't
+    followed. Commits are got from remotes through `remotes`. Raises OSError where a file that
+    is there can't be read."""
     catalogue = catalogue or Catalogue.load()
     contract = Contract.load(catalogue)
     remotes = remotes or Remotes()
@@ -268,7 +260,7 @@ def bind(
     at = (reader.commit, reader.url) if isinstance(reader, CommitReader) else (None, None)
     top = _Place(Identity(root, at[0]), reader, at[1])
     if read(top) is None or reader.repo is None:
-        return Bound(None, tuple(diagnostics))
+        return None, tuple(diagnostics)
     todo = [top]
     while todo:
         owner = todo.pop(0)
@@ -292,7 +284,7 @@ def bind(
         for resolution in _resolutions(members, member.identity, member.analysis)
     )
     stack = Stack(top.identity, MappingProxyType(members), resolutions, _switches(resolutions))
-    return Bound(stack, tuple(diagnostics))
+    return stack, tuple(diagnostics)
 
 
 def _check(

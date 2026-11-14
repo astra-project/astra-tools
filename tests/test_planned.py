@@ -102,7 +102,7 @@ ROOT_ID, SUB_ID = Identity(""), Identity("subanalysis")
 
 
 def building(top: Path) -> Building:
-    stack = bind(WorktreeReader(top, Repository(top)), "").stack
+    stack = bind(WorktreeReader(top, Repository(top)), "")[0]
     assert stack is not None
     return Context(stack, Catalogue.load()).building
 

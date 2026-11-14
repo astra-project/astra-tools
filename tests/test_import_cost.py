@@ -41,7 +41,7 @@ ALLOWED = {
     "astra.cli.text.history": ("rich", "ruamel.yaml"),
     "astra.cli.text.info": ("rich", "ruamel.yaml"),
     "astra.cli.text.validate": ("rich", "ruamel.yaml"),
-    "astra.cli.text.view": ("rich", "ruamel.yaml"),
+    "astra.cli.text.view": ("rich",),
     "astra.cli.validate": (),
     "astra.cli.view": (),
     "astra.contract": (),
@@ -56,6 +56,7 @@ ALLOWED = {
     "astra.papers.download": (),
     "astra.records": ("ruamel.yaml",),
     "astra.resolve": ("ruamel.yaml",),
+    "astra.resolved": (),
     "astra.rules": ("ruamel.yaml",),
     "astra.rules.commits": ("ruamel.yaml",),
     "astra.rules.context": ("ruamel.yaml",),
@@ -84,7 +85,6 @@ ALLOWED = {
     "astra.verification.cache": ("rapidfuzz",),
     "astra.verification.core": ("rapidfuzz",),
     "astra.verification.pdf": ("rapidfuzz",),
-    "astra.view": ("ruamel.yaml",),
 }
 """Each module, with what importing it may pull in of `WATCHED`. A new module is added here."""
 

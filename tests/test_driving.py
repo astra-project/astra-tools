@@ -161,7 +161,7 @@ def found(report: api.ValidationReport) -> list[tuple[str, str, str, str | None]
 
 
 def bound(top: Path, folder: str = "") -> Stack:
-    stack = bind(WorktreeReader(top, Repository(top)), folder).stack
+    stack = bind(WorktreeReader(top, Repository(top)), folder)[0]
     assert stack is not None
     return stack
 

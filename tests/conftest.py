@@ -4,7 +4,6 @@ astra-spec's conformance suite and examples are in `tests/spec.py`."""
 from __future__ import annotations
 
 import importlib.metadata
-import posixpath
 import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -12,10 +11,10 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.grammar import fill
-from astra.hashing import digest_bytes, digest_file
-from astra.records import Record, RecordedInput, Runner, write_record
-from astra.resolve import Read, Result
+from astra.hashing import Digest, digest_bytes, digest_file
+from astra.history import History
+from astra.resolve import read
+from astra.sources.remote import Remotes
 
 MINIMAL = """\
 spec_version: "0.1.0"
@@ -107,29 +106,18 @@ def analysis(folder: Path, text: str = MINIMAL) -> Path:
     return folder
 
 
-def rendered(result: Result) -> str:
-    """`result`'s command as a runner might fill it (`grammar.fill`), with every path relative to
-    the folder the recipe runs in, in one checkout: what each entry of its output's `inputs`
-    reads, the option each entry of its `decisions` selects, and the first name's default place.
-    What an entry reads at a commit is no file of the checkout, so it is written
-    `<commit>:<path>`, git's name for it."""
-
-    def at(path: str) -> str:
-        return posixpath.relpath(path, result.workdir or ".")
-
-    def where(read: Read) -> str:
-        return at(read.path) if read.commit is None else f"{read.commit}:{read.path}"
-
-    return fill(
-        result.command,
-        inputs={read.entry: where(read) for read in result.inputs},
-        decisions=result.decisions,
-        output=at(result.places[0].bytes),
-    )
+RUNNER = api.Runner("astra-tools-tests", "1")
+ENVIRONMENT = api.Environment("urn:example:environment1")
 
 
-RUNNER = Runner("astra-tools-tests", "1")
-ENVIRONMENT = "urn:example:environment1"
+def owner(analysis: api.ResolvedAnalysis, result: api.Result) -> api.Analysis:
+    """The analysis `result` belongs to: its universe's or, for a result built once, its
+    output's."""
+    for each in analysis.analyses:
+        held = each.outputs if result.universe is None else each.universes
+        if (result.universe or result.output) in [element.ref for element in held]:
+            return each
+    raise LookupError(result.id)
 
 
 def build(
@@ -137,43 +125,61 @@ def build(
     folder: Path | None = None,
     *,
     commit: str | None = None,
-    made: Callable[[Result], bytes] = lambda result: f"{result.places[0].address}\n".encode(),
-) -> tuple[Result, ...]:
-    """Build the analysis in `folder`, `top` by default, in the working tree whose top is `top`,
-    as a runner would but without running a recipe: each planned result that isn't a result from
-    a commit, each after what it reads, gets the bytes `made` gives it at each of its default
-    places, and a record at each of its places, naming `commit` (HEAD by default) as the commit
-    its recipe ran from. What an entry reads at a commit is got through `api.history`. Nothing is
-    committed. Gives the planned results."""
+    made: Callable[[api.Result], bytes] = lambda result: f"{result.places[0].address}\n".encode(),
+) -> tuple[api.Result, ...]:
+    """Build the analysis in `folder`, `top` by default, a folder of the working tree whose top
+    is `top`, as a runner would but without running a recipe: each planned result that isn't a
+    result from a commit, each after what it reads, gets the bytes `made` gives it at each of
+    its default places, and a record at each of its places, naming `commit` (HEAD by default) as
+    the commit its recipe ran from. What an entry reads of a result from a commit is got from
+    git. Nothing is committed. Gives the planned results."""
+    root = folder or top
     commit = commit or git(top, "rev-parse", "HEAD").strip()
-    results = api.resolve(folder or top).results
-    for result in results:
-        if result.from_commit:
+    analysis = api.resolve(root)
+    inputs = {each.ref: each for found in analysis.analyses for each in found.inputs}
+    results = {result.id: result for result in analysis.results}
+    for result in analysis.results:
+        if owner(analysis, result).commit is not None:
             continue
         data = made(result)
         for place in result.places:
-            (top / place.bytes).parent.mkdir(parents=True, exist_ok=True)
-            (top / place.bytes).write_bytes(data)
-        read = []
-        for entry in result.inputs:
-            if entry.commit is None:
-                found = digest_file(top / entry.path)
+            (root / place.bytes_path).parent.mkdir(parents=True, exist_ok=True)
+            (root / place.bytes_path).write_bytes(data)
+        read_ = []
+        for source in result.inputs:
+            found: Digest
+            if source.input is not None:
+                found = digest_file(root / inputs[source.input].path)
             else:
-                assert entry.place is not None  # an input read at a commit isn't built from here
-                found = digest_bytes(
-                    api.history(folder or top).get(entry.place.address, entry.commit)
-                )
-            read.append(RecordedInput(entry.entry, found.content_hash, found.size))
+                upstream = results[source.result or ""]
+                at = owner(analysis, upstream).commit
+                if at is None:
+                    found = digest_file(root / upstream.places[0].bytes_path)
+                else:
+                    remotes = Remotes()
+                    history = History(read(root, remotes), remotes)
+                    found = digest_bytes(history.get(upstream.places[0].address, at.id))
+            read_.append(api.RecordedInput(source.entry, found.content_hash, found.size))
         hashed = digest_bytes(data)
-        for place in result.places:
-            record = Record(
-                place.address,
-                hashed.content_hash,
-                hashed.size,
-                commit,
-                ENVIRONMENT,
-                RUNNER,
-                tuple(read),
-            )
-            write_record(top / place.record, record)
-    return results
+        run = api.Generation(commit, ENVIRONMENT, RUNNER, tuple(read_))
+        api.write_records(root, result, hashed.content_hash, hashed.size, run)
+    return analysis.results
+
+
+def remake(top: Path, id_: str, data: bytes, environment: api.Environment = ENVIRONMENT) -> None:
+    """Make the root's result `id_` again in the working tree `top`, as a runner would from
+    HEAD: `data` its bytes, and its record, of what it reads in the working tree, run in
+    `environment`."""
+    analysis = api.resolve(top)
+    paths = {each.ref: each.path for found in analysis.analyses for each in found.inputs}
+    paths |= {result.id: result.places[0].bytes_path for result in analysis.results}
+    (result,) = [result for result in analysis.results if result.id == id_]
+    (top / result.places[0].bytes_path).write_bytes(data)
+    found = [
+        (source.entry, digest_file(top / paths[source.input or source.result or ""]))
+        for source in result.inputs
+    ]
+    listed = tuple(api.RecordedInput(entry, d.content_hash, d.size) for entry, d in found)
+    made = digest_bytes(data)
+    run = api.Generation(git(top, "rev-parse", "HEAD").strip(), environment, RUNNER, listed)
+    api.write_records(top, result, made.content_hash, made.size, run)

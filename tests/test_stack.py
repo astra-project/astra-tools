@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from astra.diagnostics import Diagnostic
 from astra.sources.git import Repository
 from astra.sources.reader import WorktreeReader
-from astra.stack import Bound, Element, Identity, Resolution, Stack, bind
+from astra.stack import Element, Identity, Resolution, Stack, bind
 from tests.conftest import MINIMAL, repository
 
 SUB = """\
@@ -52,14 +53,14 @@ outputs:
 """
 
 
-def bound(top: Path, folder: str = "") -> Bound:
+def bound(top: Path, folder: str = "") -> tuple[Stack | None, tuple[Diagnostic, ...]]:
     return bind(WorktreeReader(top, Repository(top)), folder)
 
 
 def stack(top: Path, folder: str = "") -> Stack:
-    result = bound(top, folder)
-    assert result.stack is not None, result.diagnostics
-    return result.stack
+    found, diagnostics = bound(top, folder)
+    assert found is not None, diagnostics
+    return found
 
 
 def resolution(stack: Stack, written: str) -> Resolution:
@@ -167,19 +168,19 @@ def test_an_invalid_file_is_reported_and_its_analysis_is_undetermined(
         tmp_path,
         {"astra.yaml": root("{sub: {path: sub}}", "[sub.output1]"), "sub/astra.yaml": text},
     )
-    result = bound(top)
-    assert [(d.code, d.location.file) for d in result.diagnostics] == [(code, "sub/astra.yaml")]
-    assert result.stack is not None
-    assert result.stack.analyses[Identity("sub")].analysis is None
-    assert result.stack.analyses[Identity("sub")].declarations == {}
-    assert result.stack.analyses[Identity("")].declarations["sub"].outcome == "invalid"
-    assert resolution(result.stack, "sub.output1").undetermined
+    found, diagnostics = bound(top)
+    assert [(d.code, d.location.file) for d in diagnostics] == [(code, "sub/astra.yaml")]
+    assert found is not None
+    assert found.analyses[Identity("sub")].analysis is None
+    assert found.analyses[Identity("sub")].declarations == {}
+    assert found.analyses[Identity("")].declarations["sub"].outcome == "invalid"
+    assert resolution(found, "sub.output1").undetermined
 
 
 def test_an_invalid_root_gives_no_stack(tmp_path: Path) -> None:
     top = repository(tmp_path, {"astra.yaml": MINIMAL + "name: x\n"})
-    result = bound(top)
-    assert (result.stack, [d.code for d in result.diagnostics]) == (None, ["UNKNOWN_FIELD"])
+    found, diagnostics = bound(top)
+    assert (found, [d.code for d in diagnostics]) == (None, ["UNKNOWN_FIELD"])
 
 
 # --- Addresses: each resolved through its chain of declarations ---

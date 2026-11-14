@@ -148,6 +148,31 @@ _KINDS: Mapping[str, Kind] = MappingProxyType(
 )
 
 
+class NoAnalysisError(Exception):
+    """No `astra.yaml` where an analysis is asked for: a usage error, not a broken rule."""
+
+
+def worktree(path: str | os.PathLike[str] | None) -> tuple[Reader, str]:
+    """The reader of the working tree that holds the analysis whose folder is `path`, the
+    current folder by default, and that folder's path in it. Nothing is searched for: the folder
+    holds the analysis's `astra.yaml`. Raises NoAnalysisError where it holds none."""
+    folder = Path.cwd() if path is None else Path(path)
+    if not folder.is_dir():
+        raise NoAnalysisError(f"{folder} isn't a folder: give the folder of an analysis")
+    repo = Repository.discover(folder)
+    reader: Reader
+    if repo is None:
+        # Outside a repository, a file's path is from the analysis's folder.
+        reader, root = WorktreeReader(folder, None), ""
+    else:
+        reader = WorktreeReader(repo.top, repo)
+        root = "/".join(folder.resolve().relative_to(repo.top).parts)
+    entry = reader.stat(posixpath.join(root, "astra.yaml"))
+    if entry is None or entry.kind != "file":  # a symlink isn't one
+        raise NoAnalysisError(f"{folder} has no astra.yaml file: give the folder of an analysis")
+    return reader, root
+
+
 class UnreachableError(Exception):
     """A commit that can't be got from its remote."""
 

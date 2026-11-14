@@ -1,5 +1,5 @@
-"""The commands `info` and `init`, and the `astra.api` functions
-they call, on what they promise: output, exit codes and what they leave on disk."""
+"""The commands `info` and `init`, and what they read an analysis through, on what they
+promise: output, exit codes and what they leave on disk."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ import pytest
 from click.testing import CliRunner, Result
 
 from astra import api
-from astra.cli import main
+from astra.cli import main, read_stack
+from astra.sources.reader import worktree
+from astra.stack import bind
 from tests.conftest import MINIMAL, analysis, git, git_init, repository
 
 
@@ -18,22 +20,23 @@ def astra(*args: str) -> Result:
     return CliRunner().invoke(main, list(args))
 
 
-# --- api.bind ---
+# --- read_stack ---
 
 
-def test_bind_gives_the_stack_and_its_files_diagnostics(tmp_path: Path) -> None:
-    """Every analysis of the stack, the root first, with the schema diagnostics of a declared
-    file that isn't a valid document; none where the root's file isn't one."""
+def test_read_stack_gives_the_stack_of_an_analysis_that_neednt_be_valid(tmp_path: Path) -> None:
+    """Every analysis of the stack of the analysis in a folder, the root first, with the schema
+    diagnostics of a declared file that isn't a valid document; none where the root's file
+    isn't one."""
     root = MINIMAL + "analyses: {sub: {path: sub}}\n"
     top = repository(tmp_path, {"astra.yaml": root, "sub/astra.yaml": MINIMAL + "name: x\n"})
-    bound = api.bind(top)
-    assert bound.stack is not None
-    assert [str(identity) for identity in bound.stack.analyses] == [".", "sub"]
-    assert [(d.code, d.location.file) for d in bound.diagnostics] == [
+    stack = read_stack(top)
+    assert stack is not None
+    assert [str(identity) for identity in stack.analyses] == [".", "sub"]
+    assert [(d.code, d.location.file) for d in bind(*worktree(top))[1]] == [
         ("UNKNOWN_FIELD", "sub/astra.yaml")
     ]
     (top / "astra.yaml").write_text(MINIMAL + "name: x\n")
-    assert api.bind(top).stack is None
+    assert read_stack(top) is None
 
 
 # --- info ---

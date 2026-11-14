@@ -16,7 +16,7 @@ queries:
 - `find`: the versions whose `content_hash`, or whose environment, is the one asked for;
 - `get`: the bytes a result had at a commit, checked against its record there.
 
-History is read only of a valid stack, one that resolves (`api.history`).
+History is read only of a valid stack, one that resolves (`resolve.read`).
 """
 
 from __future__ import annotations
@@ -26,13 +26,13 @@ from dataclasses import dataclass
 from astra.contract import Contract
 from astra.diagnostics import Catalogue, Diagnostic
 from astra.hashing import Digest, digest_bytes
-from astra.records import Record, read_record
-from astra.resolve import Resolved, Result
+from astra.records import ProvenanceRecord, RecordedInput, read_record
+from astra.resolve import Resolved, input_path, reads
 from astra.sources.git import Repository
 from astra.sources.reader import CommitReader, in_repository
 from astra.sources.remote import Remotes
 from astra.stack import Identity
-from astra.universes import Place, RequestError
+from astra.universes import Place, Planned, RequestError, places
 
 
 class NotInHistoryError(Exception):
@@ -47,7 +47,7 @@ class Version:
     place: Place  # the result's place: its address and record's path
     commit: str  # the commit that changed the record's file there; for a result read through
     # its record, the commit its analysis is read at
-    record: Record | tuple[Diagnostic, ...] | None  # what the file holds there: a record, the
+    record: ProvenanceRecord | tuple[Diagnostic, ...] | None  # what the file holds: a record, the
     # parse or schema rules it breaks, or None where that commit removed it
 
 
@@ -58,8 +58,8 @@ class Link:
     entry: str  # as the record lists it
     digest: Digest  # the hash and size the record gives
     path: str | None  # for an input, its file, as the analysis now reads it: a leaf
-    place: Place | None  # for a planned result, the place whose bytes it now reads; neither
-    # where the output has no such entry today
+    place: Place | None  # for a planned result, its first place; neither where the output has
+    # no such entry today
     version: Version | None  # the newest version of that result's record that gives these
     # hash and size, committed no later than the record that lists them; None where none does
     inputs: tuple[Link, ...]  # what that version was made from
@@ -87,14 +87,13 @@ class Lineage:
 
 
 class History:
-    """The history of the records of a valid stack's planned results (`api.history`), each
-    version read once."""
+    """The history of the records of a valid stack's planned results, each version read once."""
 
     def __init__(self, resolved: Resolved, remotes: Remotes | None = None) -> None:
-        self.resolved = resolved
+        self.context = resolved.context
         self.stack = resolved.context.stack
         self.remotes = remotes or Remotes()
-        self.results = resolved.results
+        self.results = tuple(resolved.planned.values())  # each after every result it reads
         self._contract = Contract.load(Catalogue.load())
         self._kept: dict[tuple[Identity, str], tuple[Version, ...]] = {}
 
@@ -111,10 +110,10 @@ class History:
         result, place = self._named(address)
         versions = self._versions(result, place)
         version = versions[0] if versions else None
-        if version is None or not isinstance(version.record, Record):
+        if version is None or not isinstance(version.record, ProvenanceRecord):
             return Lineage(place, version, (), ())
         if used_by:
-            return Lineage(place, version, (), self._users(result, place))
+            return Lineage(place, version, (), self._users(result))
         return Lineage(place, version, self._inputs(result, version), ())
 
     def find(
@@ -129,12 +128,12 @@ class History:
         return tuple(
             version
             for result in self.results
-            for place in result.places
+            for place in places(self.stack, result)
             for version in self._versions(result, place)
-            if isinstance(version.record, Record)
+            if isinstance(version.record, ProvenanceRecord)
             and (
                 version.record.content_hash == content_hash
-                or version.record.environment == environment
+                or version.record.generated_by.environment.iri == environment
             )
         )
 
@@ -152,7 +151,7 @@ class History:
             raise RequestError(f"`{revision}` names no commit of {repo.top}")
         reader = CommitReader(repo, commit, self.stack.analyses[result.owner].url, self.remotes)
         record = read_record(reader, record_path, self._contract)
-        if not isinstance(record, Record) or record.address != place.address:
+        if not isinstance(record, ProvenanceRecord) or record.address != place.address:
             what = "no record" if record is None else f"no valid record of `{place.address}`"
             raise NotInHistoryError(f"{commit} holds {what} at {place.record}")
         entry = reader.stat(bytes_)
@@ -161,13 +160,13 @@ class History:
                 f"{commit} holds no file at {place.bytes}: its bytes aren't in git there"
             )
         data = reader.read(bytes_)
-        if digest_bytes(data) != record.digest:
+        if digest_bytes(data) != _digest(record):
             raise NotInHistoryError(
                 f"the bytes at {place.bytes} in {commit} aren't the ones its record there gives"
             )
         return data
 
-    def _named(self, address: str) -> tuple[Result, Place]:
+    def _named(self, address: str) -> tuple[Planned, Place]:
         """The planned result whose place has the address `address`, and that place: the
         root's own result first, then the first resolved. Raises RequestError where
         none has it."""
@@ -175,7 +174,7 @@ class History:
         found = [
             (result, place)
             for result in self.results
-            for place in result.places
+            for place in places(self.stack, result)
             if place.address == address
         ]
         if not found:
@@ -184,14 +183,14 @@ class History:
             )
         return min(found, key=lambda pair: pair[0].owner != self.stack.root)
 
-    def _versions(self, result: Result, place: Place) -> tuple[Version, ...]:
+    def _versions(self, result: Planned, place: Place) -> tuple[Version, ...]:
         """Each version of the record at `place` of `result`, newest first: its file at each
         commit along HEAD's history that changed it, in the repository that holds the analysis
         it belongs to; for a result read through its record, the one at the commit its
         analysis is read at."""
         key = (result.owner, place.record)
         if key not in self._kept:
-            if result.from_commit:  # its one version, at the declared commit
+            if self._from_commit(result):  # its one version, at the declared commit
                 assert result.owner.commit is not None
                 reader = self.stack.analyses[result.owner].reader
                 found = read_record(reader, place.record, self._contract)
@@ -206,52 +205,50 @@ class History:
                 self._kept[key] = tuple(versions)
         return self._kept[key]
 
-    def _inputs(self, result: Result, version: Version) -> tuple[Link, ...]:
+    def _inputs(self, result: Planned, version: Version) -> tuple[Link, ...]:
         """What `version` of `result`'s record, one that holds a record, says the recipe read,
-        each entry matched with what `result` reads today: an input's file, or the place of the
-        planned result it reads and the version of its record that gives the hash and size
-        recorded (`_made`), and what that one read."""
-        assert isinstance(version.record, Record)
-        reads = {read.entry: read for read in result.inputs}
+        each entry matched with what `result` reads today: an input's file, or the planned
+        result it reads, with the version of its record that gives the hash and size recorded
+        (`_made`), and what that one read."""
+        assert isinstance(version.record, ProvenanceRecord)
+        today = {entry.written: through for entry, through in reads(self.context, result)}
         links = []
-        for item in version.record.inputs:
-            read = reads.get(item.entry)  # what it reads today
-            if read is None or read.result is None or read.place is None:
-                path = None if read is None else read.path
-                links.append(Link(item.entry, item.digest, path, None, None, ()))
+        for item in version.record.generated_by.inputs:
+            through = today.get(item.entry)
+            if through is None or through.target.kind == "input":
+                path = None if through is None else input_path(self.stack, through.target)
+                links.append(Link(item.entry, _digest(item), path, None, None, ()))
                 continue
-            done = self.resolved.result(read.result)
-            made = self._made(done, read.place, item.digest, result, version)
-            below = () if made is None else self._inputs(done, made)
-            links.append(Link(item.entry, item.digest, None, read.place, made, below))
+            read = self.context.building.planned[through.target, through.universe]
+            place = places(self.stack, read)[0]
+            made = self._made(read, place, _digest(item), result, version)
+            below = () if made is None else self._inputs(read, made)
+            links.append(Link(item.entry, _digest(item), None, place, made, below))
         return tuple(links)
 
-    def _users(self, result: Result, place: Place) -> tuple[Use, ...]:
-        """Each place of a planned result that reads `result` at `place` and whose record at
-        HEAD lists it, with the hash and size it gives, and the version of `result`'s record
-        that gives them."""
+    def _users(self, result: Planned) -> tuple[Use, ...]:
+        """Each place of a planned result that reads `result` and whose record at HEAD lists
+        it, with the hash and size it gives, and the version of `result`'s record that gives
+        them."""
+        place = places(self.stack, result)[0]
         uses = []
         for user in self.results:
-            for read in user.inputs:
-                if read.result == result.key and read.place == place:
-                    uses.extend(self._uses(user, read.entry, result, place))
+            for entry, through in reads(self.context, user):
+                if (through.target, through.universe) != (result.output, result.universe):
+                    continue
+                for at in places(self.stack, user):
+                    versions = self._versions(user, at)
+                    record = versions[0].record if versions else None
+                    if not isinstance(record, ProvenanceRecord):
+                        continue
+                    for item in record.generated_by.inputs:
+                        if item.entry == entry.written:
+                            made = self._made(result, place, _digest(item), user, versions[0])
+                            uses.append(Use(versions[0], item.entry, _digest(item), made))
         return tuple(uses)
 
-    def _uses(self, user: Result, entry: str, result: Result, place: Place) -> list[Use]:
-        """Each place of `user` whose record at HEAD lists `entry`, which reads `result` at
-        `place`."""
-        uses = []
-        for at in user.places:
-            versions = self._versions(user, at)
-            record = versions[0].record if versions else None
-            for item in record.inputs if isinstance(record, Record) else ():
-                if item.entry == entry:
-                    made = self._made(result, place, item.digest, user, versions[0])
-                    uses.append(Use(versions[0], item.entry, item.digest, made))
-        return uses
-
     def _made(
-        self, result: Result, place: Place, digest: Digest, by: Result, listed: Version
+        self, result: Planned, place: Place, digest: Digest, by: Planned, listed: Version
     ) -> Version | None:
         """The newest version of `result`'s record at `place` that gives `digest`, which
         `listed`, a version of `by`'s record, lists: where the two records are in one
@@ -260,20 +257,28 @@ class History:
         # No later than the record that lists it, where one repository holds both.
         repo, _ = self._held(result, place.record)
         lister, _ = self._held(by, listed.place.record)
-        bounded = not result.from_commit and repo == lister
+        bounded = not self._from_commit(result) and repo == lister
         return next(
             (
                 version
                 for version in self._versions(result, place)
-                if isinstance(version.record, Record)
-                and version.record.digest == digest
+                if isinstance(version.record, ProvenanceRecord)
+                and _digest(version.record) == digest
                 and (not bounded or repo.is_ancestor(version.commit, listed.commit))
             ),
             None,
         )
 
-    def _held(self, result: Result, path: str) -> tuple[Repository, str]:
+    def _from_commit(self, result: Planned) -> bool:
+        """Whether `result` is a result from a commit, read through its record there."""
+        return result.owner.commit != self.stack.root.commit
+
+    def _held(self, result: Planned, path: str) -> tuple[Repository, str]:
         """The repository that holds the analysis `result` belongs to, and `path`, from the top
         of the tree that analysis is read in, as a path from that repository's top."""
         member = self.stack.analyses[result.owner]
         return in_repository(member.reader, result.owner.folder, path)
+
+
+def _digest(recorded: ProvenanceRecord | RecordedInput) -> Digest:
+    return Digest(recorded.content_hash, recorded.size)

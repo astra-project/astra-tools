@@ -42,7 +42,15 @@ def command(file: Path | None, decisions: bool, inputs: bool, outputs: bool, as_
         click.echo("Error: No astra.yaml found in current directory or parents.", err=True)
         click.echo("Use --file to specify the analysis file.", err=True)
         raise click.exceptions.Exit(FAILED)
-    stack = read_stack(found if found.is_dir() else found.parent)
+    folder = found if found.is_dir() else found.parent
+    stack = read_stack(folder)
+    if stack is None:
+        click.echo(
+            "astra: the analysis's astra.yaml isn't a valid document, or isn't in a git "
+            f"repository, so there is no stack to show: `astra validate {folder}` says why",
+            err=True,
+        )
+        raise click.exceptions.Exit(FAILED)
     if as_json:
         write_json(to_json(stack))
         return

@@ -1,16 +1,13 @@
-"""check(): each planned result's record and bytes statuses, at each of its places, and the
-statuses of the root's evidence and of a declared analysis's that cites a planned result.
+"""check(): each planned result's status, and the status of the evidence that cites one.
 
-A checker reads records only through planned results: the resolved analysis
-(`resolve.resolve`) gives each, each after what it reads, with its places, what each entry of
-its output's `inputs` reads and the option each entry of its `decisions` selects. At each
-place:
+A checker reads records only through planned results, which the resolved analysis gives
+(`resolve.resolve`), each after what it reads. At each place of a result:
 
 - the record: none is there (`MISSING_RECORD`); it breaks a parse or schema rule, by the record
-  schema its minor version picks (`INVALID_RECORD`, each code it breaks a reason); its `address`
-  isn't the place's (`MISPLACED_RECORD`); its `inputs` aren't one item for each entry its output
-  lists at the commit it names (`MISSING_RECORD_INPUTS`). Each leaves the result `missing`, and
-  the last two are checked only on a record that breaks neither of the first two;
+  schema its minor version picks (`INVALID_RECORD`); its `address` isn't the place's
+  (`MISPLACED_RECORD`); its `inputs` aren't one item for each entry its output lists at the
+  commit it names (`MISSING_RECORD_INPUTS`). Each leaves the result `missing`, and the last two
+  are checked only on a record that breaks neither of the first two;
 - the result is then `stale` where something `STALE_RESULT` compares has changed since the
   record's commit, the stack as it was there bound through a CommitReader, from the folder of
   the analysis the result belongs to, or where that commit can't be read or has no such output;
@@ -20,54 +17,41 @@ place:
 - its bytes are `present` where those at the default place hash to the record's, and `absent`
   otherwise: `ABSENT_RESULT` where it has a valid record.
 
+A result has one status, the worst of its places'. What is wrong with the result itself is in
+`Status.why`, a diagnostic for each rule it breaks; that it reads a result that isn't unchanged,
+or one made again since with other bytes, is in `Status.stale_inputs`, by entry, and is no
+diagnostic of its own, as the reason is the other result's. So a result that is `stale` with no
+error in `why` is stale only through what it reads: it is unchanged again once each of those is
+built with the bytes its record gives for the entry (Results *made from*), which a runner that
+builds them can tell without a second check.
+
 A result of an analysis from a commit is read through its record at the declared commit, in the
 analysis it belongs to, and the hashes of the results it reads are taken from their records;
-only one that a planned result reads gets a bytes status.
-Evidence gets the status of the records it cites (`STALE_EVIDENCE`), through the case a switch
-it names takes in each of the root's universes (Results *Evidence*): the root's, and each item
-of a declared analysis's evidence that cites a planned result.
-
-Each `STALE_RESULT` says what changed (`Reason.change`), and so whether the result is stale in
-itself or only through a result it reads. What to build of what isn't unchanged is a runner's
-to say, and `Status.unchanged_given` answers the one question it then has of a result that
-only reads what it rebuilt: whether it reads the bytes its record gives.
-
-A stack that breaks a `MUST` is checked too: every result whose planning is determined
-(`resolve.resolve`) gets its statuses, and so does the evidence citing only such results, while
-the report holds the validation errors (`api.check`).
+only one that a planned result reads gets a bytes status. Evidence gets the status of the
+results it cites (`STALE_EVIDENCE`): the root's, and each item of a declared analysis's evidence
+that cites a planned result.
 """
 
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from astra import hashing
 from astra.contract import Contract
-from astra.diagnostics import Catalogue, Diagnostic, Level, Location
-from astra.records import Record, read_record
-from astra.resolve import Key, Read, Resolved, Result, selected
+from astra.diagnostics import Catalogue, Diagnostic, Location
+from astra.records import ProvenanceRecord, RecordedInput, read_record
+from astra.resolve import Resolved, input_path, reads, selected
+from astra.resolved import ResolvedAnalysis, Result, to_json
 from astra.rules.context import Context
 from astra.sources import standins
 from astra.sources.git import Repository
-from astra.sources.reader import CommitReader, in_repository
+from astra.sources.reader import CommitReader
 from astra.sources.remote import Remotes
-from astra.stack import Element, Identity, Member, Resolution, bind
-from astra.universes import (
-    Place,
-    RequestError,
-    Selection,
-    Step,
-    Through,
-    along,
-    read_in,
-    root_output,
-    root_universe,
-)
-
-SHAPE = "astra-check-report/2"
+from astra.stack import Element, Member, bind
+from astra.universes import Place, Planned, Selection, Step, Through, places
 
 CODES = frozenset(
     {
@@ -82,215 +66,114 @@ CODES = frozenset(
 )
 """The check layer's codes, which this module reports."""
 
-RecordStatus = Literal["unchanged", "stale", "missing"]
-BytesStatus = Literal["present", "absent"]
+State = Literal["unchanged", "stale", "missing"]
+Bytes = Literal["present", "absent"]
 
-_WORST: tuple[RecordStatus, ...] = ("missing", "stale", "unchanged")
-"""The record statuses, the worst first."""
-
-Change = Literal["declaration", "selection", "switch", "input", "result", "commit"]
-"""What a `STALE_RESULT` found changed since the record's commit, of what a result is made from
-(Results *made from*): its output's `declaration` (command, inputs, decisions, format); the
-option a decision of its selects, its `selection`; a `switch` an entry reads through, its
-decision, the option selected for it or the case it takes; the content of an `input`; a `result`
-it reads, which is stale, missing or was made again with other bytes; or its record's `commit`,
-which can't be read, or has no such output, so that nothing can be compared."""
-
-
-@dataclass(frozen=True)
-class Reason:
-    """A check rule broken at a place of a planned result, or by evidence, and what breaks it."""
-
-    code: str
-    level: Level
-    message: str
-    location: Location  # the record, or the place in it of a parse or schema error; the bytes'
-    # default place; or the evidence's `artifact`
-    breaks: str | None = None  # for INVALID_RECORD, the parse or schema code the record breaks
-    change: Change | None = None  # for STALE_RESULT, what changed
-    entry: str | None = None  # for a `switch`, an `input` or a `result`, the entry of the
-    # output's `inputs` that reads it, as written
+_WORST: tuple[State, ...] = ("missing", "stale", "unchanged")
+"""The states, the worst first."""
 
 
 @dataclass(frozen=True)
 class Status:
-    """A planned result's statuses at one of its places."""
+    """A planned result's status."""
 
-    place: Place
-    record_status: RecordStatus
-    bytes_status: BytesStatus | None  # None for a result of an analysis from a commit that no
-    # recipe reads
-    committed: bool  # git has the record at the place as it is
-    reasons: tuple[Reason, ...]
-    record: Record | None  # the record there, where it is the result's: unchanged or stale
-
-    def unchanged_given(self, read: Mapping[str, hashing.Digest]) -> bool:
-        """Whether the result would be `unchanged` at this place were each result it reads
-        unchanged, with the bytes `read` gives by entry of its output's `inputs`: a result made
-        from a stale or missing one is stale only until that one is rebuilt with the hash it
-        recorded (Results *made from*).
-
-        A runner that rebuilds what a result reads asks this once those are built, of the
-        status it had before, and builds the result only where the answer is no: it needs no
-        second check, and nothing but the record. False where there is no record that is the
-        result's, where anything else it is made from has changed, where a result it reads isn't
-        unchanged and `read` doesn't give it, and where `read` gives other bytes than the record
-        does for an entry."""
-        if self.record is None:
-            return False
-        for reason in self.reasons:
-            if reason.code == "ABSENT_RESULT":  # of its bytes, not of what it is made from
-                continue
-            if reason.change != "result" or reason.entry not in read:
-                return False
-        recorded = {item.entry: item.digest for item in self.record.inputs}
-        return all(recorded.get(entry) == digest for entry, digest in read.items())
-
-
-@dataclass(frozen=True)
-class Checked:
-    """A planned result, and its statuses at each of its places, in their order."""
-
-    result: Result
-    statuses: tuple[Status, ...]
+    state: State
+    bytes: Bytes | None = None  # None for a result of an analysis from a commit that no recipe
+    # reads
+    record: ProvenanceRecord | None = None  # its record, where every place holds one that is
+    # the result's: the first place's
+    why: tuple[Diagnostic, ...] = ()  # each rule the result itself breaks
+    stale_inputs: tuple[str, ...] = ()  # each entry of its output's `inputs` that reads a result
+    # that isn't unchanged, or one made again since with other bytes than the record gives
 
 
 @dataclass(frozen=True)
 class EvidenceStatus:
-    """An item of evidence that cites an output, the root's or a declared analysis's, and the
-    status it gets."""
+    """An item of evidence that cites an output, and the status it gets: the worst of the
+    results it cites, and `missing` where it cites none."""
 
-    location: Location  # its `artifact`, in the astra.yaml that holds it
-    artifact: str  # as written
-    cites: tuple[str, ...]  # the addresses of the records it is given the status of
-    record_status: RecordStatus
-    reasons: tuple[Reason, ...]  # STALE_EVIDENCE, where it isn't unchanged
+    insight: str  # the insight it backs, by ref
+    index: int  # which item of the insight's `evidence`, from zero
+    state: State
+    why: tuple[Diagnostic, ...] = ()  # STALE_EVIDENCE, where it isn't unchanged
 
 
 @dataclass(frozen=True)
 class CheckReport:
-    """What checking an analysis found."""
+    """What checking an analysis found: the analysis as it resolved, each planned result's
+    status by the result's id, and the status of each evidence that cites one."""
 
-    root: str  # the root's astra.yaml, as a Location's `file` names it
-    at: str  # "worktree", or the commit the stack, its records and bytes are read at
-    results: tuple[Checked, ...]  # each after every result it reads
+    analysis: ResolvedAnalysis
+    statuses: Mapping[str, Status]
     evidence: tuple[EvidenceStatus, ...]
-    errors: tuple[Diagnostic, ...] = ()  # the `MUST`s the analysis breaks, as `validate` finds
-    resolved: Resolved | None = None  # the analysis as it was resolved to be checked, where it
-    # is valid: None where it breaks a `MUST`
-
-    @property
-    def ok(self) -> bool:
-        """True when the analysis is valid and every planned result, at each of its places, and
-        every evidence is `unchanged`, absent bytes notwithstanding: `astra check`'s verdict."""
-        # Evidence that isn't unchanged fails the check, as STALE_EVIDENCE is a MUST.
-        statuses = [status.record_status for c in self.results for status in c.statuses]
-        statuses += [evidence.record_status for evidence in self.evidence]
-        return not self.errors and all(status == "unchanged" for status in statuses)
 
     def to_json(self) -> dict[str, Any]:
-        """The report as `astra-check-report/2`."""
-        # The exact JSON form.
-        return {
-            "shape": SHAPE,
-            "root": self.root,
-            "at": self.at,
-            "results": [
-                {
-                    "names": list(checked.result.names),
-                    "owner": asdict(checked.result.owner),
-                    "output": asdict(checked.result.output),
-                    "universe": None
-                    if checked.result.universe is None
-                    else checked.result.universe.id,
-                    "places": [
-                        {
-                            **asdict(status.place),
-                            "record_status": status.record_status,
-                            "bytes_status": status.bytes_status,
-                            "committed": status.committed,
-                            "reasons": [asdict(reason) for reason in status.reasons],
-                            # `record` is the place's: the path of its record's file.
-                            "recorded": None if status.record is None else status.record.to_json(),
-                        }
-                        for status in checked.statuses
-                    ],
-                }
-                for checked in self.results
-            ],
-            "evidence": [
-                {
-                    "location": asdict(evidence.location),
-                    "artifact": evidence.artifact,
-                    "cites": list(evidence.cites),
-                    "record_status": evidence.record_status,
-                    "reasons": [asdict(reason) for reason in evidence.reasons],
-                }
-                for evidence in self.evidence
-            ],
-            "errors": [diagnostic.to_json() for diagnostic in self.errors],
-        }
+        """The report as JSON (`resolved.to_json`)."""
+        value: dict[str, Any] = to_json(self)
+        return value
 
 
-def check(
-    resolved: Resolved,
-    universes: Iterable[str] | None = None,
-    outputs: Iterable[str] | None = None,
-    remotes: Remotes | None = None,
-    errors: tuple[Diagnostic, ...] = (),
-) -> CheckReport:
-    """The statuses of every planned result of `resolved` at each of its places, and of the
-    root's evidence and each item of a declared analysis's evidence that cites a planned result,
-    its records and bytes read where its stack is: in the working tree, or at the commit its
-    root is read at. Where the stack breaks a `MUST`, whose `errors` the report holds, only the
-    results whose planning is determined, and the evidence that cites only such results, get
-    statuses.
-
-    `universes`, ids of the root's universes, and `outputs`, addresses read in the root's file,
-    only narrow the planned results reported to those built in those universes and of those
-    outputs; the evidence is not narrowed. Commits are got from remotes through `remotes`.
-    Raises RequestError where a universe or an output asked for isn't there, or is a switch, or
-    an output asked for has no planned result there."""
-    stack, results = resolved.context.stack, resolved.results
-    narrowed = None if universes is None else {root_universe(stack, id_) for id_ in universes}
-    named = {root_output(stack, address): address for address in outputs or ()}
-    kept = [
-        result
-        for result in results
-        if (narrowed is None or result.universe in narrowed)
-        and (not named or result.output in named)
-    ]
-    for output, address in named.items():
-        if not any(result.output == output for result in kept):
-            where = "" if narrowed is None else " in the universes asked for"
-            raise RequestError(
-                f"`{address}` has no planned result{where}: a check covers only the planned "
-                "results, which `astra check` lists"
-            )
-    context = resolved.context
+def check(resolved: Resolved, remotes: Remotes | None = None) -> CheckReport:
+    """The status of every planned result of `resolved`, and of the root's evidence and each
+    item of a declared analysis's evidence that cites a planned result, its records and bytes
+    read where its stack is: in the working tree, or at the commit its root is read at. Commits
+    are got from remotes through `remotes`."""
+    context, analysis = resolved.context, resolved.analysis
     checker = _Checker(context, Contract.load(context.catalogue), remotes or Remotes())
     # Of the results from a commit, only those a planned result reads get a bytes status, and
     # so ABSENT_RESULT.
-    read = {entry.result for user in results for entry in user.inputs if entry.result is not None}
-    statuses: dict[Key, tuple[Status, ...]] = {}
-    for result in results:
-        has_bytes = not result.from_commit or result.key in read
-        statuses[result.key] = tuple(
-            checker.place(result, place, statuses, has_bytes) for place in result.places
+    read = {source.result for result in analysis.results for source in result.inputs}
+    statuses: dict[str, Status] = {}
+    for result, planned in zip(analysis.results, resolved.planned.values(), strict=True):
+        has_bytes = planned.owner.commit == context.stack.root.commit or result.id in read
+        statuses[result.id] = _worst_of(
+            [
+                checker.place(result, planned, place, statuses, has_bytes)
+                for place in places(context.stack, planned)
+            ]
         )
-    evidence = (
-        checker.evidence(entry, statuses)
-        for entry in stack.resolutions
-        if entry.field == "artifact"
+    return CheckReport(analysis, statuses, tuple(_evidence(resolved, statuses)))
+
+
+def _worst_of(each: list[Status]) -> Status:
+    """A result's status, from its status at each of its places."""
+    absent = any(status.bytes == "absent" for status in each)
+    return Status(
+        _worst(status.state for status in each),
+        None if each[0].bytes is None else "absent" if absent else "present",
+        each[0].record if all(status.record is not None for status in each) else None,
+        tuple(diagnostic for status in each for diagnostic in status.why),
+        tuple(dict.fromkeys(entry for status in each for entry in status.stale_inputs)),
     )
-    return CheckReport(
-        stack.analyses[stack.root].file,
-        stack.root.commit or "worktree",
-        tuple(Checked(result, statuses[result.key]) for result in kept),
-        tuple(status for status in evidence if status is not None),
-        errors,
-        None if errors else resolved,
-    )
+
+
+def _evidence(resolved: Resolved, statuses: Mapping[str, Status]) -> Iterator[EvidenceStatus]:
+    """The status of each evidence that cites an output: the root's, and each item of a declared
+    analysis's that cites a planned result, as a check covers no other."""
+    context = resolved.context
+    identities = {key: identity for identity, key in resolved.keys.items()}
+    for analysis in resolved.analysis.analyses:
+        for insight in (*analysis.prior_insights, *analysis.findings):
+            for index, evidence in enumerate(insight.evidence):
+                cites = evidence.cites
+                if cites is None or (analysis.key and not cites):
+                    continue
+                state = _worst(statuses[id_].state for id_ in cites)
+                if state == "unchanged":
+                    yield EvidenceStatus(insight.ref, index, state)
+                    continue
+                collection, id_ = insight.ref.split(".")[-2:]
+                at = context.at(
+                    identities[analysis.key], (collection, id_, "evidence", index, "artifact")
+                )
+                what = (
+                    f"cites {', '.join(f'`{cited}`' for cited in cites)}: "
+                    f"{'it is' if len(cites) == 1 else 'one of them is'} {state}"
+                    if cites
+                    else "cites no result: none is planned for it in a universe of the root"
+                )
+                broken = context.diagnostic("STALE_EVIDENCE", f"the evidence {what}", at)
+                yield EvidenceStatus(insight.ref, index, state, (broken,))
 
 
 @dataclass(frozen=True)
@@ -305,8 +188,7 @@ class _Then:
 
 
 class _Checker:
-    """What one check reads, each once: the stacks bound at the records' commits, and HEAD of
-    each repository that holds a record of the working tree."""
+    """What one check reads, each once: the stacks bound at the records' commits."""
 
     def __init__(self, context: Context, contract: Contract, remotes: Remotes) -> None:
         self.context = context
@@ -316,81 +198,68 @@ class _Checker:
         self.remotes = remotes
         self.standins = standins.registered()
         self._bound: dict[tuple[Repository, str, str], Context | str] = {}
-        self._heads: dict[Repository, CommitReader | None] = {}
-
-    def reason(
-        self,
-        code: str,
-        message: str,
-        location: Location,
-        breaks: str | None = None,
-        change: Change | None = None,
-        entry: str | None = None,
-    ) -> Reason:
-        """`code` broken, at the level its rule's `MUST` or `SHOULD` gives."""
-        return Reason(code, self.catalogue.level(code), message, location, breaks, change, entry)
 
     def place(
         self,
         result: Result,
+        planned: Planned,
         place: Place,
-        statuses: Mapping[Key, tuple[Status, ...]],
+        statuses: Mapping[str, Status],
         has_bytes: bool,
     ) -> Status:
-        """`result`'s statuses at `place`, from those of the results it reads (`statuses`)."""
-        member = self.stack.analyses[result.owner]
+        """The status of `result`, the planned result `planned`, at `place`, from those of the
+        results it reads (`statuses`)."""
+        member = self.stack.analyses[planned.owner]
         at = _location(member, place.record)
         found = read_record(member.reader, place.record, self.contract)
-        reasons: list[Reason] = []
-        status: RecordStatus = "missing"
+        why: list[Diagnostic] = []
+        stale: list[str] = []
+        state: State = "missing"
         record = None
         if found is None:
             message = (
                 f"no record is at {place.record}: build `{place.address}`, and record it there"
             )
-            reasons.append(self.reason("MISSING_RECORD", message, at))
+            why.append(self.catalogue.diagnostic("MISSING_RECORD", message, at))
         elif isinstance(found, tuple):
             for broken in found:
                 # A record below 0.1 breaks INVALID_RECORD itself, and no other code says why.
-                breaks = None if broken.code == "INVALID_RECORD" else broken.code
-                reasons.append(
-                    self.reason("INVALID_RECORD", broken.message, broken.location, breaks)
-                )
+                breaks = "" if broken.code == "INVALID_RECORD" else f" ({broken.code})"
+                message = f"{broken.message}{breaks}"
+                why.append(self.catalogue.diagnostic("INVALID_RECORD", message, broken.location))
         else:
             if found.address != place.address:
                 message = (
                     f"the record's address is `{found.address}`, where this place is "
                     f"`{place.address}`'s: a record is the record only of the result it names"
                 )
-                reasons.append(self.reason("MISPLACED_RECORD", message, at))
-            then = self._then(result, place, found)
+                why.append(self.catalogue.diagnostic("MISPLACED_RECORD", message, at))
+            then = self._then(planned, place, found)
+            changes: list[str] = []
             if isinstance(then, str):  # stale, since what it is compared with is gone
-                if not reasons:
-                    reasons.append(self.reason("STALE_RESULT", then, at, change="commit"))
-                    status, record = "stale", found
+                changes = [then]
             else:
-                reasons.extend(self._inputs(found, then, at))
-                if not reasons:
-                    changes = self._changes(result, found, then, statuses)
-                    reasons.extend(
-                        self.reason("STALE_RESULT", message, at, change=change, entry=entry)
-                        for change, entry, message in changes
-                    )
-                    status, record = ("stale" if changes else "unchanged"), found
-        bytes_status: BytesStatus | None = None
+                why.extend(self._inputs(found, then, at))
+                if not why:
+                    changes, stale = self._changes(result, planned, found, then, statuses)
+            if not why:
+                why.extend(
+                    self.catalogue.diagnostic("STALE_RESULT", message, at) for message in changes
+                )
+                state, record = ("stale" if changes or stale else "unchanged"), found
+        bytes_: Bytes | None = None
         if has_bytes:
-            bytes_status, absent = self._bytes(member, place, record)
-            reasons.extend(absent)
-        committed = found is not None and self._committed(member, place.record)
-        return Status(place, status, bytes_status, committed, tuple(reasons), record)
+            bytes_, absent = self._bytes(member, place, record)
+            why.extend(absent)
+        return Status(state, bytes_, record, tuple(why), tuple(stale))
 
-    def _then(self, result: Result, place: Place, record: Record) -> _Then | str:
-        """`result` as the commit `record` names has it: the stack bound there, from the folder
+    def _then(self, planned: Planned, place: Place, record: ProvenanceRecord) -> _Then | str:
+        """`planned` as the commit `record` names has it: the stack bound there, from the folder
         of the analysis it belongs to, the output its name at `place` names there, and its
         universe's effective selection there; or why that can't be read, which leaves it
         `stale`."""
-        commit = record.commit
-        member = self.stack.analyses[result.owner]
+        commit = record.generated_by.commit
+        member = self.stack.analyses[planned.owner]
         repo, folder = member.reader.holding(member.identity.folder)
         key = (repo, commit, folder)
         if key not in self._bound:
@@ -405,8 +274,8 @@ class _Checker:
                 "so what the result was made from can't be compared"
             )
         universe, selection = None, None
-        if result.universe is not None:
-            universe = Element(context.stack.root, "universe", result.universe.id)
+        if planned.universe is not None:
+            universe = Element(context.stack.root, "universe", planned.universe.id)
             selection = context.selections.get(universe)
         return _Then(context, output, universe, selection)
 
@@ -424,260 +293,145 @@ class _Checker:
         file = posixpath.join(folder, "astra.yaml")
         entry = reader.stat(file)
         if entry is not None and entry.kind == "file":
-            bound = bind(reader, folder, self.catalogue, self.remotes)
-            if bound.stack is not None:
-                return Context(bound.stack, self.catalogue)
+            stack, _ = bind(reader, folder, self.catalogue, self.remotes)
+            if stack is not None:
+                return Context(stack, self.catalogue)
         return (
             f"at {commit[:12]}, the commit the record names, {file} isn't a valid astra.yaml, so "
             "what the result was made from can't be compared"
         )
 
-    def _inputs(self, record: Record, then: _Then, at: Location) -> Iterable[Reason]:
+    def _inputs(self, record: ProvenanceRecord, then: _Then, at: Location) -> Iterator[Diagnostic]:
         """`MISSING_RECORD_INPUTS`: one item of the record's `inputs` for each entry its output
         lists at the record's commit, matched by `entry`, and no other, in any order."""
         listed = then.context.stack.analysis(then.output.analysis).outputs[then.output.id].inputs
-        items = [item.entry for item in record.inputs]
-        commit = record.commit[:12]
-        for entry in listed:
-            if entry not in items:
-                message = (
-                    f"the record has no item for `{entry}`, which its output lists at {commit}"
-                )
-                yield self.reason("MISSING_RECORD_INPUTS", message, at)
+        items = [item.entry for item in record.generated_by.inputs]
+        commit = record.generated_by.commit[:12]
+        found = [
+            f"the record has no item for `{entry}`, which its output lists at {commit}"
+            for entry in listed
+            if entry not in items
+        ]
         for entry in dict.fromkeys(items):
             if entry not in listed:
-                message = (
+                found.append(
                     f"the record has an item for `{entry}`, which its output doesn't list at "
                     f"{commit}"
                 )
-                yield self.reason("MISSING_RECORD_INPUTS", message, at)
             elif items.count(entry) > 1:
-                message = f"the record has {items.count(entry)} items for `{entry}`, not one"
-                yield self.reason("MISSING_RECORD_INPUTS", message, at)
+                found.append(f"the record has {items.count(entry)} items for `{entry}`, not one")
+        for message in found:
+            yield self.catalogue.diagnostic("MISSING_RECORD_INPUTS", message, at)
 
     def _changes(
         self,
         result: Result,
-        record: Record,
+        planned: Planned,
+        record: ProvenanceRecord,
         then: _Then,
-        statuses: Mapping[Key, tuple[Status, ...]],
-    ) -> list[tuple[Change, str | None, str]]:
-        """What has changed, since the commit `record` names, of what `STALE_RESULT` compares,
-        each as what changed, the entry of the output's `inputs` it is about, if any, and the
-        message: the output's declaration, the options its decisions select in its universe, for
-        each switch an entry reads through the decision it switches on, the option selected for
-        it and the case it takes, the content of its inputs, and the results it reads
-        (Results *made from*)."""
-        commit = record.commit[:12]
-        now = self.stack.analysis(result.output.analysis).outputs[result.output.id]
+        statuses: Mapping[str, Status],
+    ) -> tuple[list[str], list[str]]:
+        """What has changed, since the commit `record` names, of what `STALE_RESULT` compares
+        (Results *made from*). First, what has changed of the result itself, each as a message:
+        its output's declaration, the options its decisions select in its universe, for each
+        switch an entry reads through the decision it switches on, the option selected for it
+        and the case it takes, and the content of its inputs. Then each entry that reads a
+        result that isn't unchanged, or one made again since with other bytes than the record
+        gives for the entry."""
+        commit = record.generated_by.commit[:12]
+        now = self.stack.analysis(planned.output.analysis).outputs[planned.output.id]
         was = then.context.stack.analysis(then.output.analysis).outputs[then.output.id]
-        changes: list[tuple[Change, str | None, str]] = []
+        changes: list[str] = []
+        stale: list[str] = []
         assert now.recipe is not None and was.recipe is not None  # a result's output's
         if now.recipe.command != was.recipe.command:
-            message = f"its recipe's command isn't the one it had at {commit}"
-            changes.append(("declaration", None, message))
+            changes.append(f"its recipe's command isn't the one it had at {commit}")
         if now.inputs != was.inputs:
-            message = (
+            changes.append(
                 f"its inputs are {_listed(now.inputs)}, in that order, where they were "
                 f"{_listed(was.inputs)} at {commit}"
             )
-            changes.append(("declaration", None, message))
         if set(now.decisions) != set(was.decisions):
-            message = (
+            changes.append(
                 f"its decisions are {_listed(now.decisions)}, where they were "
                 f"{_listed(was.decisions)} at {commit}"
             )
-            changes.append(("declaration", None, message))
         if now.format != was.format:
-            message = f"its format is `{now.format}`, where it was `{was.format}` at {commit}"
-            changes.append(("declaration", None, message))
+            changes.append(f"its format is `{now.format}`, where it was `{was.format}` at {commit}")
+        selection = None if planned.universe is None else self.context.selections[planned.universe]
         before = selected(then.context.written[then.output], then.selection)
-        for written, option in result.decisions.items():
+        for written, option in selected(self.context.written[planned.output], selection).items():
             if written in before and before[written] != option:
-                assert result.universe is not None  # an output built once lists no decisions
-                message = (
-                    f"`{written}` selects {_option(option)} in `{result.universe.id}`, where it "
+                assert planned.universe is not None  # an output built once lists no decisions
+                changes.append(
+                    f"`{written}` selects {_option(option)} in `{planned.universe.id}`, where it "
                     f"selected {_option(before[written])} at {commit}"
                 )
-                changes.append(("selection", None, message))
-        recorded = {item.entry: item for item in record.inputs}
-        entries = [
-            entry for entry in self.context.written[result.output] if entry.field == "inputs"
-        ]
+        recorded = {item.entry: item for item in record.generated_by.inputs}
         listed = {  # the output's entries at that commit, by how each is written
             entry.written: entry
             for entry in then.context.written[then.output]
             if entry.field == "inputs"
         }
-        for entry, read in zip(entries, result.inputs, strict=True):
-            item = recorded.get(read.entry)
+        for (entry, through), source in zip(
+            reads(self.context, planned), result.inputs, strict=True
+        ):
+            item = recorded.get(source.entry)
             if item is None:  # an entry its output didn't list at that commit: a change above
                 continue
-            through = self.context.meaning.through(entry, result.universe)
-            assert through is not None  # what a planned result reads is determined
             earlier = listed.get(entry.written)
             read_then = (
                 None if earlier is None else then.context.meaning.through(earlier, then.universe)
             )
             changes.extend(
-                ("switch", read.entry, message)
-                for message in _switched(
-                    read.entry, through, read_then, self.context, then.context, commit
-                )
+                _switched(source.entry, through, read_then, self.context, then.context, commit)
             )
-            if read.result is None:
-                found = self._content(through.target.analysis, read)
+            if source.result is None:
+                path = input_path(self.stack, through.target)
+                found = self._content(through.target, path)
                 if found is None:  # stale, since it can't be compared
-                    message = (
-                        f"the content of `{read.entry}` can't be read at {read.path}: no file "
-                        "is there, or only a stand-in that gives no SHA-256"
+                    changes.append(
+                        f"the content of `{source.entry}` can't be read at {path}: no file is "
+                        "there, or only a stand-in that gives no SHA-256"
                     )
-                    changes.append(("input", read.entry, message))
-                elif found != item.digest:
-                    message = (
-                        f"the content of `{read.entry}`, {read.path}, isn't what the recipe read"
+                elif found != _digest(item):
+                    changes.append(
+                        f"the content of `{source.entry}`, {path}, isn't what the recipe read"
                     )
-                    changes.append(("input", read.entry, message))
                 continue
-            status = _read(read, statuses)
-            address = status.place.address
-            what = f"`{address}`, which it reads" + (
-                "" if read.entry == address else f" through `{read.entry}`"
-            )
-            if status.record_status != "unchanged":
-                how = "has no valid record" if status.record_status == "missing" else "is stale"
-                changes.append(("result", read.entry, f"{what}, {how}"))
-            elif status.record is not None and status.record.digest != item.digest:
-                message = f"{what}, was made again since, with other bytes than it read"
-                changes.append(("result", read.entry, message))
-        return changes
+            status = statuses[source.result]
+            remade = status.record is not None and _digest(status.record) != _digest(item)
+            if status.state != "unchanged" or remade:
+                stale.append(source.entry)
+        return changes, stale
 
-    def _content(self, analysis: Identity, read: Read) -> hashing.Digest | None:
-        """The hash and size of an input of `analysis`, which may be another than the switch's
-        an entry reads it through: of its file or, where a stand-in is at its path, what the
-        stand-in gives of it, never the stand-in's own; None where neither is there, as
-        where a stand-in beside its path gives no SHA-256."""
-        reader = self.stack.analyses[analysis].reader
+    def _content(self, input_: Element, path: str) -> hashing.Digest | None:
+        """The hash and size of `input_`, whose file is at `path`: of the file or, where a
+        stand-in is at its path, what the stand-in gives of it, never the stand-in's own; None
+        where neither is there, as where a stand-in beside its path gives no SHA-256."""
+        reader = self.stack.analyses[input_.analysis].reader
         for standin in self.standins:
-            if standin.place(read.path) == read.path and standin.recognises(reader, read.path):
-                given = standin.gives(reader, read.path)
+            if standin.place(path) == path and standin.recognises(reader, path):
+                given = standin.gives(reader, path)
                 return None if given is None else hashing.Digest(*given)
-        return hashing.digest(reader, read.path)
+        return hashing.digest(reader, path)
 
     def _bytes(
-        self, member: Member, place: Place, record: Record | None
-    ) -> tuple[BytesStatus, tuple[Reason, ...]]:
+        self, member: Member, place: Place, record: ProvenanceRecord | None
+    ) -> tuple[Bytes, tuple[Diagnostic, ...]]:
         """The bytes' status at `place`, against `record`, the result's record there or None
         where it has none, and `ABSENT_RESULT` where they are absent and it has one."""
         if record is None:  # no recorded bytes, so absent, but no ABSENT_RESULT
             return "absent", ()
         found = hashing.digest(member.reader, place.bytes)
-        if found is not None and found == record.digest:
+        if found is not None and found == _digest(record):
             return "present", ()
         if found is None:
             message = f"no file is at {place.bytes}, the result's default place"
         else:
             message = f"the bytes at {place.bytes} aren't the ones its record gives"
-        return "absent", (self.reason("ABSENT_RESULT", message, _location(member, place.bytes)),)
-
-    def _committed(self, member: Member, path: str) -> bool:
-        """Whether git has the record at `path` as it is: one read at a commit has; one in the
-        working tree where HEAD of the repository that holds its analysis holds the same bytes
-        there."""
-        # Committed is HEAD's, byte for byte.
-        reader = member.reader
-        if isinstance(reader, CommitReader):
-            return True
-        repo, inner = in_repository(reader, member.identity.folder, path)
-        if repo not in self._heads:
-            head = repo.head()
-            self._heads[repo] = (
-                None if head is None else CommitReader(repo, head, None, self.remotes)
-            )
-        kept = self._heads[repo]
-        if kept is None:
-            return False
-        entry = kept.stat(inner)
-        return entry is not None and entry.kind == "file" and kept.read(inner) == reader.read(path)
-
-    def evidence(
-        self, entry: Resolution, statuses: Mapping[Key, tuple[Status, ...]]
-    ) -> EvidenceStatus | None:
-        """The status of the evidence `entry`, from the planned results it cites (`_cited`). Each
-        gives the record at the place of its name along the artifact's declarations, then each
-        case's, from the analysis it belongs to (`universes.along`), or, where they give none of its
-        names, the worst of its records. None where its `artifact` names nothing, or what it cites
-        is undetermined or a result whose planning isn't, as only on a stack that breaks a `MUST`;
-        and for a declared analysis's evidence that cites no planned result, which a check doesn't
-        cover."""
-        element = entry.element
-        if element is None:  # its artifact names nothing
-            return None
-        cited = self._cited(entry, element)
-        if cited is None or (entry.file != self.stack.root and not cited):
-            return None
-        read: list[Status] = []
-        for through in cited:
-            key = (through.target, through.universe)
-            if key not in statuses:
-                return None
-            index = along(self.context.building.planned[key], through.chain)
-            each = statuses[key]
-            read.extend(each if index is None else each[index : index + 1])
-        status = _worst(s.record_status for s in read)
-        location = self.stack.location(entry.file, entry.pointer)
-        reasons: tuple[Reason, ...] = ()
-        addresses = tuple(s.place.address for s in read)
-        if status != "unchanged":
-            none = (
-                "cites no result: it takes a case with a planned result in none of the root's "
-                "universes"
-                if element.kind == "switch"
-                else "cites no result: its output is built in none of the root's universes"
-            )
-            what = (
-                f"cites {', '.join(f'`{address}`' for address in addresses)}, whose record is "
-                f"{status}"
-                if read
-                else none
-            )
-            reasons = (self.reason("STALE_EVIDENCE", f"`{entry.written}` {what}", location),)
-        return EvidenceStatus(location, entry.written, addresses, status, reasons)
-
-    def _cited(self, entry: Resolution, element: Element) -> list[Through] | None:
-        """What the evidence `entry`, the root's or a declared analysis's, reads for each planned
-        result it cites (Results *Evidence*), each once: one where its `artifact` is pinned or names
-        an output built once; and otherwise, where it names an output built per universe or a
-        switch, in each of the root's universes, its output's result there, or the result of the
-        case the switch takes there, where it is planned.
-
-        None where, once or in one of those universes, what it cites is undetermined: its pin
-        names no universe; a switch on the way is undetermined there, as one on a cycle is, or
-        takes a case that names nothing; or what it reaches is planned by the root's run, but
-        with its planning undetermined or in a universe that doesn't build its analysis. Where a
-        switch on the way takes no case, or what it reaches isn't built, it cites nothing
-        there."""
-        context, building = self.context, self.context.building
-        if entry.pin is not None and context.pins[entry] is None:
-            return None  # its pin names no universe
-        universes: list[Element | None] = [None]
-        if entry.pin is None and (element.kind == "switch" or element in context.per_universe):
-            universes = [u for u in building.universes if u.analysis == self.stack.root]
-        found: dict[Key, Through] = {}
-        for universe in universes:
-            through = context.meaning.through(entry, universe)
-            if through is None:
-                # a switch on the way takes no case (False), or is undetermined (None)
-                at = read_in(entry, universe, context.pins, context.per_universe)
-                if context.meaning.built(element, at) is not False:
-                    return None
-                continue
-            key = (through.target, through.universe)
-            if key in building.planned:
-                found.setdefault(key, through)
-            elif key in building.run.planned:  # planned, but not determined
-                return None
-        return list(found.values())
+        at = _location(member, place.bytes)
+        return "absent", (self.catalogue.diagnostic("ABSENT_RESULT", message, at),)
 
 
 def _switched(
@@ -739,16 +493,15 @@ def _which(step: Step) -> tuple[str, str]:
     return step.switch.analysis.folder, step.switch.id
 
 
-def _worst(statuses: Iterable[RecordStatus]) -> RecordStatus:
-    """The worst of `statuses`, `missing` then `stale`; `missing` where there are none."""
-    found = set(statuses)
-    return next((status for status in _WORST if status in found), "missing")
+def _worst(states: Iterable[State]) -> State:
+    """The worst of `states`, `missing` then `stale`; `missing` where there are none."""
+    found = set(states)
+    return next((state for state in _WORST if state in found), "missing")
 
 
-def _read(read: Read, statuses: Mapping[Key, tuple[Status, ...]]) -> Status:
-    """The status of the place whose bytes `read` reads (`resolve.Read.place`)."""
-    assert read.result is not None
-    return next(s for s in statuses[read.result] if s.place == read.place)
+def _digest(recorded: ProvenanceRecord | RecordedInput) -> hashing.Digest:
+    """The hash and size a record gives, of its result's bytes or of what an entry read."""
+    return hashing.Digest(recorded.content_hash, recorded.size)
 
 
 def _location(member: Member, path: str) -> Location:

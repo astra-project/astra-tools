@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
-from astra.cli import FAILED, environment, write_json
+from astra.cli import FAILED, environment, read_stack, write_json
 
 if TYPE_CHECKING:
     from astra import model
@@ -119,14 +119,13 @@ def _validate_one(
     """Validate the analysis in `folder`, and print its report unless `as_json`. With
     `verify_evidence`, the report holds the evidence's diagnostics too. Gives whether it is
     valid, and the report as JSON."""
-    from astra import api
+    from astra.sources.reader import worktree
+    from astra.sources.remote import Remotes
+    from astra.validate import validated
 
     with environment():
-        report = api.validate(folder, offline=offline)
-    stack = None
-    if report.valid and not skip_evidence:
-        with environment():
-            stack = api.bind(folder).stack
+        report, context = validated(*worktree(folder), Remotes(offline=offline))
+    stack = context.stack if context is not None and report.valid and not skip_evidence else None
     summary: list[str] = []
     if stack is not None and verify_evidence:
         found, summary = _verify(stack)
@@ -279,8 +278,6 @@ def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
 def _roots(top: Path) -> list[Path]:
     """The folder of each root analysis under `top`: each astra.yaml that no other one found
     declares, directly or not, a folder before those below it."""
-    from astra import api
-
     found: list[Path] = []
     for folder, children, files in os.walk(top):
         children[:] = sorted(c for c in children if not c.startswith(".") and c not in SKIPPED)
@@ -292,8 +289,7 @@ def _roots(top: Path) -> list[Path]:
         if root in declared:
             continue
         roots.append(root)
-        with environment():
-            stack = api.bind(root).stack
+        stack = read_stack(root)
         if stack is not None:
             declared |= _declared(stack, root)
     return roots

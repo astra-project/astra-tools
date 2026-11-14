@@ -73,26 +73,29 @@ each command's options, exit codes and examples. The
 
 ## Python API
 
-`astra.api` is the whole public surface. It asks four questions of an analysis, from its files
-and git alone:
+`astra.api` is the whole public surface: three questions of an analysis, answered from its
+files and git alone in plain data that writes as JSON, and what a runner writes back.
 
 ```python
 from astra import api
 
-api.validate(folder)             # is it valid: every rule it breaks, and where
-resolved = api.resolve(folder)   # what it means: its planned results, each after what it reads
-resolved.view("baseline")        # ... and how it looks in one universe
-api.check(folder)                # do the records still hold: unchanged, stale or missing, and why
-api.history(folder)              # what git keeps of those records
+api.validate(folder)           # is it valid: every rule it breaks, and where
+analysis = api.resolve(folder)  # what it means, with every rule of the specification applied
+report = api.check(folder)      # do the records still hold: the analysis again, and each status
+api.write_records(folder, result, content_hash, size, generated_by)
 ```
 
-A planned result gives its address and places, what each entry of its output's `inputs` reads,
-the option each of its `decisions` selects, and its command as a template. That is what a
-runner builds on. It decides itself what to build, in what order and where; it fills each
-command with its own paths (`api.fill`), and writes what its run made as a record at each of
-the result's places (`api.Record`, `api.write_record`). Each stale result in a check report
-says what changed (`Reason.change`), and `Status.unchanged_given` tells a runner whether a
-result that only read what it has just rebuilt needs building too.
+A resolved analysis holds every analysis of the stack with what it declares, each universe's
+selection, and the planned results, each after every result it reads: its places, what each
+entry of its output's `inputs` reads, and its command as it runs. It holds what the rules give
+and not what they start from, so it has no switch, no `derived_from` and no template, and each
+fact once, so a reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`).
+
+That is what a runner builds on. It decides itself what to build, in what order and where. A
+check report gives it one status for each result: what the result itself breaks (`why`), and
+which entries read a result that isn't unchanged (`stale_inputs`), so that it can tell, once it
+has rebuilt those, whether a result that only read them needs building too. What its run made it
+writes with `write_records`, a record at each of the result's places.
 
 ## Development
 

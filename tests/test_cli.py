@@ -166,13 +166,11 @@ def test_validate_exits_2_where_there_is_no_analysis(tmp_path: Path) -> None:
 
 
 def test_an_internal_error_exits_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from astra import api
-
-    def broken(path: object, **options: object) -> None:
+    def broken(*args: object) -> None:
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(api, "validate", broken)
-    result = astra("validate", str(tmp_path))
+    monkeypatch.setattr(validate, "validated", broken)
+    result = astra("validate", str(analysis(git_init(tmp_path))))
     assert result.exit_code == 2
     assert "internal error: RuntimeError: broken" in result.stderr
 

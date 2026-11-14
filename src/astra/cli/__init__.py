@@ -81,12 +81,10 @@ def environment() -> Iterator[None]:
     """Stop with exit 2 where the analysis can't be read: there is none, git or the cache can't
     be used, or a file can't be read."""
     from astra import api
-    from astra.cache import CacheError
-    from astra.sources.git import GitError
 
     try:
         yield
-    except (api.NoAnalysisError, CacheError, GitError) as error:
+    except (api.NoAnalysisError, api.CacheError, api.GitError) as error:
         fail(str(error))
     except OSError as error:
         fail(f"can't read {error.filename}: {error.strerror}")
@@ -102,23 +100,15 @@ def find_analysis(start: Path | None = None) -> Path | None:
     return None
 
 
-def read_stack(path: Path | None) -> Stack:
-    """The stack whose root is the analysis in `path` (`api.bind`). Stops with exit 2 where it
-    can't be read, and with exit 1 where its root's file isn't a valid document or it is in no
-    repository, so that there is no stack to show."""
-    from astra import api
+def read_stack(path: Path | None) -> Stack | None:
+    """The stack whose root is the analysis in `path`, which needn't be valid; None where its
+    root's file isn't a valid document or it is in no repository. Stops with exit 2 where it
+    can't be read."""
+    from astra.sources.reader import worktree
+    from astra.stack import bind
 
     with environment():
-        bound = api.bind(path)
-    if bound.stack is None:
-        folder = "." if path is None else str(path)
-        click.echo(
-            "astra: the analysis's astra.yaml isn't a valid document, or isn't in a git "
-            f"repository, so there is no stack to show: `astra validate {folder}` says why",
-            err=True,
-        )
-        raise click.exceptions.Exit(FAILED)
-    return bound.stack
+        return bind(*worktree(path))[0]
 
 
 def write_report(report: ValidationReport, as_json: bool) -> None:

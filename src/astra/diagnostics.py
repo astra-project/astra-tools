@@ -15,7 +15,8 @@ from importlib.resources import files
 from types import MappingProxyType
 from typing import Any, Literal
 
-Level = Literal["error", "warning"]
+Level = Literal["error", "warning", "note"]
+"""A `MUST` broken is an error and a `SHOULD` a warning; a note breaks no rule."""
 
 
 @dataclass(frozen=True)

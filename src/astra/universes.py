@@ -217,15 +217,6 @@ def cut_loops(start: Identity, chain: Chain) -> Chain:
     return tuple(kept)
 
 
-def along(result: Planned, chain: Chain) -> int | None:
-    """Which of `result`'s names `chain` gives, its index: `chain`'s declarations from the
-    analysis it belongs to on, every stretch that leads back cut out (`cut_loops`), are those of
-    the name. None where they give none of its names, as where `chain` never
-    reaches that analysis."""
-    cut = cut_loops(result.owner, chain)
-    return next((index for index, named in enumerate(result.chains) if named == cut), None)
-
-
 Used = Mapping[Identity, frozenset[Element]]
 """For each analysis driving, the decisions some universe of its own uses (Results *uses*)."""
 
@@ -1092,35 +1083,5 @@ def building(stack: Stack, run: Run, chains: Mapping[Identity, tuple[Chain, ...]
 
 
 class RequestError(ValueError):
-    """What is asked for isn't in the stack: a universe or an output that isn't there, a switch
-    where an output is meant, a revision that names no commit. A usage error."""
-
-
-def root_universe(stack: Stack, id_: str) -> Element:
-    """The root's universe `id_`. Raises RequestError where the root has none, or `id_` is an
-    import, which selects nothing."""
-    entry = stack.analysis(stack.root).universes.get(id_)
-    if entry is None or entry.is_import:
-        own = [key for key, u in stack.analysis(stack.root).universes.items() if not u.is_import]
-        what = (
-            f"`{id_}` is an import, which selects nothing"
-            if entry
-            else f"the analysis has no universe `{id_}`"
-        )
-        listed = ", ".join(own) if own else "none"
-        raise RequestError(f"{what}: its universes are {listed}")
-    return Element(stack.root, "universe", id_)
-
-
-def root_output(stack: Stack, address: str) -> Element:
-    """The output `address` names in the root's file. Raises RequestError where it names
-    none, or names a switch, which has no result (Elements *switch*)."""
-    output = stack.element(address, "output")
-    if output is None and stack.element(address, "switch") is not None:
-        raise RequestError(
-            f"`{address}` is a switch, which has no result of its own: ask for the output a case "
-            "names"
-        )
-    if output is None:
-        raise RequestError(f"`{address}` names no output, read in the root's file")
-    return output
+    """What is asked for isn't there: a revision that names no commit, an address that is no
+    planned result's. A usage error."""
