@@ -5,8 +5,8 @@ whether it is built in the universe; each of its decisions, the option the unive
 it and whether the universe uses it, with the root driving (Results *uses*); and each of its
 outputs, whether it is built there (Results *built*), the case it takes there for a switch
 (Elements *takes*), and its planned result there, with its places: its result in the universe,
-or its one result where it is built once. Like the plan, the view is made only of a valid stack
-(`api.view`).
+or its one result where it is built once. The view is made only of a valid stack: it is
+`Resolved.view`, of an analysis `api.resolve` resolved.
 """
 
 from __future__ import annotations
@@ -16,11 +16,9 @@ from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Any
 
-from astra.diagnostics import Catalogue
-from astra.plan import root_universe
 from astra.rules.context import Context
-from astra.stack import Element, Kind, Member, Stack
-from astra.universes import Place, Planned, places
+from astra.stack import Element, Kind, Member
+from astra.universes import Place, Planned, places, root_universe
 
 SHAPE = "astra-universe-view/1"
 
@@ -98,10 +96,10 @@ def _result(output: OutputView) -> dict[str, Any] | None:
     }
 
 
-def view(stack: Stack, universe: str) -> UniverseView:
-    """`stack`, a valid stack, as it is in the root's universe `universe`. Raises RequestError
-    where the root has no such universe."""
-    context = Context(stack, Catalogue.load())
+def view(context: Context, universe: str) -> UniverseView:
+    """The stack of `context`, a valid stack, as it is in the root's universe `universe`. Raises
+    RequestError where the root has no such universe."""
+    stack = context.stack
     element = root_universe(stack, universe)
     selection = context.selections[element]
     assert selection is not None  # every universe of a valid stack has one

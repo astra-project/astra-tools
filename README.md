@@ -7,10 +7,10 @@
 
 astra-tools is the reference tooling for [ASTRA 0.1](https://astra-spec.org/0.1/), the Agentic
 Schema for Transparent Research Analysis. Its command, `astra`, validates an analysis and every
-analysis it declares, shows what it plans to build and how it looks in each universe, checks what
-was built against its records, and reads those records' history from git. It runs no recipe: a
-runner builds the results and records them, through astra-tools' Python API or its `--json`
-output.
+analysis it declares, shows how it looks in each universe, checks what was built against its
+records, and reads those records' history from git. It runs no recipe and plans no run: a
+runner builds the results and records them, and astra-tools' [Python API](#python-api) tells it
+what the results are, where each one goes and what its record holds.
 
 astra-tools reads ASTRA 0.1 files. ASTRA 0.0.x files need its 0.2 line.
 
@@ -70,6 +70,29 @@ is built and current.
 The [CLI reference](https://astra-spec.org/0.1.0rc1/cli/) gives
 each command's options, exit codes and examples. The
 [specification](https://astra-spec.org/0.1/) says what an analysis means and what each rule asks.
+
+## Python API
+
+`astra.api` is the whole public surface. It asks four questions of an analysis, from its files
+and git alone:
+
+```python
+from astra import api
+
+api.validate(folder)             # is it valid: every rule it breaks, and where
+resolved = api.resolve(folder)   # what it means: its planned results, each after what it reads
+resolved.view("baseline")        # ... and how it looks in one universe
+api.check(folder)                # do the records still hold: unchanged, stale or missing, and why
+api.history(folder)              # what git keeps of those records
+```
+
+A planned result gives its address and places, what each entry of its output's `inputs` reads,
+the option each of its `decisions` selects, and its command as a template. That is what a
+runner builds on. It decides itself what to build, in what order and where; it fills each
+command with its own paths (`api.fill`), and writes what its run made as a record at each of
+the result's places (`api.Record`, `api.write_record`). Each stale result in a check report
+says what changed (`Reason.change`), and `Status.unchanged_given` tells a runner whether a
+result that only read what it has just rebuilt needs building too.
 
 ## Development
 

@@ -771,13 +771,11 @@ def run(
     per_universe: frozenset[Element],
     cycles: frozenset[Element],
     driver: Identity,
-    requested: tuple[Element, ...] = (),
 ) -> Run:
     """What `driver` reaches, plans and uses (Results *plans*, *reaches*, *uses*), from what
     `meaning` says is taken and built, the addresses each element writes (`written`), the
     effective selections, the universe each pin names (`pins`), the outputs built per universe
-    and the outputs and switches on a cycle; with the outputs `requested` as its own, to build
-    them on request (`plan.plan`).
+    and the outputs and switches on a cycle.
 
     Its planning roots are its own outputs other than switches that no case of its own names,
     its own switches that no entry of its own `inputs` and no case of its own names, and what
@@ -821,7 +819,7 @@ def run(
             pinning[entry, at] = None
         return reach(element, at)
 
-    for element in _roots(stack, driver, requested):
+    for element in _roots(stack, driver):
         for universe in own if _each(element, per_universe) else [None]:
             roots.append(reach(element, universe))
     starts = list(roots)  # the roots but for what evidence cites, which `_branches` follows
@@ -914,10 +912,10 @@ def _each(element: Element | None, per_universe: frozenset[Element]) -> bool:
     return element is not None and (element.kind == "switch" or element in per_universe)
 
 
-def _roots(stack: Stack, driver: Identity, requested: tuple[Element, ...]) -> list[Element]:
+def _roots(stack: Stack, driver: Identity) -> list[Element]:
     """`driver`'s own planning roots but for what its evidence cites (Results *plans*): its
-    outputs other than switches that no case of its own names, its switches that no entry of its
-    own `inputs` and no case of its own names, and the outputs `requested`."""
+    outputs other than switches that no case of its own names, and its switches that no entry of
+    its own `inputs` and no case of its own names."""
     named: set[Element] = set()
     read: set[Element] = set()
     for entry in stack.resolutions:
@@ -932,7 +930,7 @@ def _roots(stack: Stack, driver: Identity, requested: tuple[Element, ...]) -> li
         element = Element(driver, kind, id_)
         if element not in named and (kind == "output" or element not in read):
             found.append(element)
-    return [*found, *requested]  # one asked for, as the driver's own
+    return found
 
 
 def _cited(stack: Stack, driver: Identity) -> list[Resolution]:
@@ -1091,3 +1089,38 @@ def building(stack: Stack, run: Run, chains: Mapping[Identity, tuple[Chain, ...]
         if status is True and named is not None:
             planned[output, universe] = Planned(output, universe, named)
     return Building(MappingProxyType(universes), MappingProxyType(planned), run.reads, run)
+
+
+class RequestError(ValueError):
+    """What is asked for isn't in the stack: a universe or an output that isn't there, a switch
+    where an output is meant, a revision that names no commit. A usage error."""
+
+
+def root_universe(stack: Stack, id_: str) -> Element:
+    """The root's universe `id_`. Raises RequestError where the root has none, or `id_` is an
+    import, which selects nothing."""
+    entry = stack.analysis(stack.root).universes.get(id_)
+    if entry is None or entry.is_import:
+        own = [key for key, u in stack.analysis(stack.root).universes.items() if not u.is_import]
+        what = (
+            f"`{id_}` is an import, which selects nothing"
+            if entry
+            else f"the analysis has no universe `{id_}`"
+        )
+        listed = ", ".join(own) if own else "none"
+        raise RequestError(f"{what}: its universes are {listed}")
+    return Element(stack.root, "universe", id_)
+
+
+def root_output(stack: Stack, address: str) -> Element:
+    """The output `address` names in the root's file. Raises RequestError where it names
+    none, or names a switch, which has no result (Elements *switch*)."""
+    output = stack.element(address, "output")
+    if output is None and stack.element(address, "switch") is not None:
+        raise RequestError(
+            f"`{address}` is a switch, which has no result of its own: ask for the output a case "
+            "names"
+        )
+    if output is None:
+        raise RequestError(f"`{address}` names no output, read in the root's file")
+    return output

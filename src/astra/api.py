@@ -1,5 +1,21 @@
-"""The stable public functions of astra-tools: `validate`, `bind`, `plan`, `view`, `check` and
-`history`. `astra.scaffold.create_boilerplate` writes a new analysis."""
+"""The public surface of astra-tools: everything a tool built on it imports, from here.
+
+Four questions of an analysis, each a function of the files and git, none of which runs a recipe:
+
+- `validate`: is it valid;
+- `resolve`: what does it mean, its planned results with their places, what each reads and the
+  options each is made with, and through `Resolved.view` how it looks in one universe;
+- `check`: do its results' records still hold;
+- `history`: what does git keep of those records.
+
+`bind` gives the stack of an analysis that needn't be valid. Beside them are what a runner
+writes and fills in: the record format (`Record`, `write_record`, `timestamp`), a file's
+`Digest` as a record gives it (`digest_file`), and the grammar of a recipe's command (`fill`).
+`astra.scaffold.create_boilerplate` writes a new analysis.
+
+What to build, in what order, where and in which environment is a runner's own business, and
+nothing here says it.
+"""
 
 from __future__ import annotations
 
@@ -8,38 +24,69 @@ import posixpath
 from collections.abc import Iterable
 from pathlib import Path
 
-from astra.check import CheckReport
-from astra.check import check as check_stack
+from astra.cache import CacheError
+from astra.check import Change, Checked, CheckReport, EvidenceStatus, Reason, Status
+from astra.check import check as check_resolved
+from astra.diagnostics import Diagnostic, Location
+from astra.grammar import fill
+from astra.hashing import Digest, digest_file
 from astra.history import History, NotInHistoryError
-from astra.plan import Plan, RequestError
-from astra.plan import plan as plan_stack
-from astra.sources.git import Repository
+from astra.model import Analysis, Resources
+from astra.records import Record, RecordedInput, Runner, timestamp, write_record
+from astra.resolve import Key, Note, Read, Resolved, Result
+from astra.resolve import resolve as resolve_stack
+from astra.sources.git import GitError, Repository
 from astra.sources.reader import CommitReader, Reader, WorktreeReader
 from astra.sources.remote import Remotes
-from astra.stack import Bound, Stack
+from astra.stack import Bound, Element, Identity, Stack
 from astra.stack import bind as bind_reader
+from astra.universes import Place, RequestError
 from astra.validate import ValidationReport, validated
 from astra.validate import validate as validate_reader
 from astra.view import UniverseView
-from astra.view import view as view_stack
 
 __all__ = [
+    "Analysis",
     "Bound",
+    "CacheError",
+    "Change",
     "CheckReport",
+    "Checked",
+    "Diagnostic",
+    "Digest",
+    "Element",
+    "EvidenceStatus",
+    "GitError",
     "History",
+    "Identity",
     "InvalidAnalysisError",
+    "Key",
+    "Location",
     "NoAnalysisError",
     "NotInHistoryError",
-    "Plan",
+    "Note",
+    "Place",
+    "Read",
+    "Reason",
+    "Record",
+    "RecordedInput",
     "RequestError",
+    "Resolved",
+    "Resources",
+    "Result",
+    "Runner",
+    "Status",
     "UniverseView",
     "ValidationReport",
     "bind",
     "check",
+    "digest_file",
+    "fill",
     "history",
-    "plan",
+    "resolve",
+    "timestamp",
     "validate",
-    "view",
+    "write_record",
 ]
 
 
@@ -48,7 +95,7 @@ class NoAnalysisError(Exception):
 
 
 class InvalidAnalysisError(Exception):
-    """The analysis breaks a `MUST`, so it has no plan, no view, no history and no papers:
+    """The analysis breaks a `MUST`, so it resolves to nothing, and has no view and no history:
     `report` says where. `check` gives what statuses it can instead."""
 
     def __init__(self, report: ValidationReport) -> None:
@@ -72,33 +119,21 @@ def validate(
     return validate_reader(reader, root, Remotes(offline=offline))
 
 
-def bind(path: str | os.PathLike[str] | None = None) -> Bound:
+def bind(path: str | os.PathLike[str] | None = None, *, offline: bool = False) -> Bound:
     """The stack whose root is the analysis whose folder is `path`, read as `validate` reads it,
     with the parse and schema diagnostics of its files. Its `stack` is None where the root's
     file isn't a valid document, or the root is in no repository. Raises as `validate` does."""
     reader, root = _root(path)
-    return bind_reader(reader, root, remotes=Remotes())
+    return bind_reader(reader, root, remotes=Remotes(offline=offline))
 
 
-def plan(
-    path: str | os.PathLike[str] | None = None,
-    *,
-    universes: Iterable[str] | None = None,
-    outputs: Iterable[str] | None = None,
-) -> Plan:
-    """The planned results of the analysis whose folder is `path`, read as `validate` reads
-    it, in an order a runner can build them in: all of them, or those `universes` and `outputs`
-    ask for (`plan.plan`). Raises InvalidAnalysisError where the analysis breaks a `MUST`,
-    RequestError where a universe or an output asked for isn't there, or is a switch (Elements
-    *switch*), or an output asked for can't be built there, and otherwise as `validate` does."""
-    return plan_stack(_valid(path), universes, outputs)
-
-
-def view(universe: str, path: str | os.PathLike[str] | None = None) -> UniverseView:
-    """The analysis whose folder is `path`, read as `validate` reads it, as it is in its
-    universe `universe`. Raises InvalidAnalysisError where the analysis breaks a `MUST`,
-    RequestError where it has no such universe, and otherwise as `validate` does."""
-    return view_stack(_valid(path), universe)
+def resolve(path: str | os.PathLike[str] | None = None, *, offline: bool = False) -> Resolved:
+    """The analysis whose folder is `path`, read as `validate` reads it, resolved: its planned
+    results, each after every result it reads, with its places, what each entry of its output's
+    `inputs` reads and the option each entry of its `decisions` selects (`resolve.resolve`).
+    Raises InvalidAnalysisError where the analysis breaks a `MUST`, and otherwise as `validate`
+    does."""
+    return resolve_stack(_valid(path, Remotes(offline=offline)))
 
 
 def check(
@@ -107,6 +142,7 @@ def check(
     at: str | None = None,
     universes: Iterable[str] | None = None,
     outputs: Iterable[str] | None = None,
+    offline: bool = False,
 ) -> CheckReport:
     """The checker's report on the analysis whose folder is `path`, read as `validate` reads
     it: each planned result's record and bytes statuses at each of its places, and its
@@ -115,35 +151,33 @@ def check(
     the analysis is checked as it is at that commit, with its records and bytes read there.
     Where the analysis breaks a `MUST`, the report holds the errors, and only the results whose
     planning is determined get statuses: none where the root's file isn't a valid document or
-    it is in no repository. Raises RequestError where `at` names no commit or a universe or an
-    output asked for isn't there, or is a switch, and otherwise as `validate` does."""
-    remotes = Remotes()
+    it is in no repository. Where it is valid, the report holds the analysis as it resolved
+    (`CheckReport.resolved`), so that one call tells a runner both what the results are and how
+    each stands. Raises RequestError where `at` names no commit or a universe or an output asked
+    for isn't there, or is a switch, and otherwise as `validate` does."""
+    remotes = Remotes(offline=offline)
     reader, report, stack = _read(path, at, remotes)
     errors = tuple(diagnostic for diagnostic in report.diagnostics if diagnostic.level == "error")
     if stack is None:  # no result's planning is determined
         commit = reader.commit if isinstance(reader, CommitReader) else "worktree"
         return CheckReport(report.root, commit, (), (), errors)
-    return check_stack(stack, universes, outputs, remotes, errors)
+    return check_resolved(resolve_stack(stack), universes, outputs, remotes, errors)
 
 
-def history(path: str | os.PathLike[str] | None = None) -> History:
+def history(path: str | os.PathLike[str] | None = None, *, offline: bool = False) -> History:
     """The history of the records of the planned results of the analysis whose folder is
     `path`, read as `validate` reads it, and read from git on demand: each query is one call of
     what this gives, `timeline`, `lineage`, `find` or `get` (`history.History`). Raises
     InvalidAnalysisError where the analysis breaks a `MUST`, and otherwise as `validate` does."""
-    # The form of the public API.
-    remotes = Remotes()
-    return History(_valid(path, None, remotes), remotes)
+    remotes = Remotes(offline=offline)
+    return History(resolve_stack(_valid(path, remotes)), remotes)
 
 
-def _valid(
-    path: str | os.PathLike[str] | None, at: str | None = None, remotes: Remotes | None = None
-) -> Stack:
-    """The stack whose root is the analysis in `path`, read in the working tree or at the
-    revision `at`, where it is valid. Raises InvalidAnalysisError where it isn't, and
-    RequestError where `at` names no commit."""
-    _, report, stack = _read(path, at, remotes or Remotes())
-    if not report.valid:  # no plan and no view of an invalid analysis
+def _valid(path: str | os.PathLike[str] | None, remotes: Remotes) -> Stack:
+    """The stack whose root is the analysis in `path`, read in the working tree, where it is
+    valid. Raises InvalidAnalysisError where it isn't."""
+    _, report, stack = _read(path, None, remotes)
+    if not report.valid:  # an invalid analysis resolves to nothing
         raise InvalidAnalysisError(report)
     assert stack is not None  # a valid analysis has a stack
     return stack

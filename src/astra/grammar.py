@@ -1,4 +1,4 @@
-"""The forms of a name: parse and format.
+"""The forms of a name, parse and format, and of a recipe's command, which `fill` fills in.
 
 ```abnf
 id               = lower *( lower / DIGIT / "_" )
@@ -9,10 +9,15 @@ option-reference = address "." id              ; a decision's address, then an o
 
 Binding parses only what the schema accepted, which takes its form (`INVALID_REFERENCE`), so a
 value is parsed by splitting it. An address formats as it is written, through `str()`.
+
+A command is a template (Elements *placeholders*): read from the left, `{{` is a literal `{`,
+`}}` a literal `}`, and any other `{` opens a placeholder, which ends at the next `}`.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -64,3 +69,41 @@ def parse_reference(text: str) -> Reference:
 def parse_option_reference(text: str) -> OptionReference:
     address = parse_address(text)
     return OptionReference(Address(address.declarations), address.id)
+
+
+TEMPLATE = re.compile(r"\{\{|\}\}|\{([^}]*)\}")
+"""What a command holds, read from the left: `{{`, `}}`, or a placeholder up to the next `}`.
+A valid stack's commands hold nothing else (`UNDECLARED_TEMPLATE_REF`)."""
+
+
+def fill(
+    command: str, *, inputs: Mapping[str, str], decisions: Mapping[str, str | None], output: str
+) -> str:
+    """`command` with each `{{` and `}}` replaced by one brace, and each placeholder replaced
+    verbatim, with no shell quoting: `{inputs.<entry>}` by what `inputs` gives for the entry,
+    `{decisions.<entry>}` by what `decisions` gives for it, `{inputs}` by everything `inputs`
+    gives, in its order, separated by spaces, and `{output}` by `output`.
+
+    The grammar alone: what a path is written as, relative to the folder the recipe runs in or
+    absolute, in which checkout, is the caller's to say. A runner gives, for each entry of the
+    output's `inputs` in their order, the path it has what the entry reads at, the option each
+    entry of its `decisions` selects, as a planned result gives them, and the path the recipe
+    writes its result to. An entry that selects nothing, as only on a stack that breaks a
+    `MUST`, fills in nothing. Raises KeyError, naming the placeholder, for one neither gives, as
+    only where the command breaks `UNDECLARED_TEMPLATE_REF` or an entry is left out."""
+
+    def filled(match: re.Match[str]) -> str:
+        text, placeholder = match[0], match[1]
+        if placeholder is None:
+            return text[0]
+        if placeholder == "output":
+            return output
+        if placeholder == "inputs":
+            return " ".join(inputs.values())
+        field, _, entry = placeholder.partition(".")
+        given = {"inputs": inputs, "decisions": decisions}.get(field)
+        if given is None or entry not in given:
+            raise KeyError(placeholder)
+        return given[entry] or ""
+
+    return TEMPLATE.sub(filled, command)

@@ -1,10 +1,15 @@
-"""Records: reading the record at a result's place, writing one, and making a result's
-records from its run.
+"""Records: reading the record at a result's place, and writing one.
 
 A record is read as UTF-8 JSON text (`load.load_json`) and checked by the record schema its
 minor version picks (`contract.Contract.check_record`): 0.1's, the open one for a greater minor
 version, which ignores the fields it doesn't know, and none below 0.1. One is written
 atomically, with sorted keys, two-space indentation and a final line break.
+
+What a record says is a runner's to find out, and true of its run (`FALSE_RECORD`): the bytes
+its recipe made and read, the commit it ran from, the environment it ran in. Nothing here hashes
+a file or reads a checkout. A runner makes a `Record` for each place of the result it built,
+with that place's address (`UNRECORDED_RESULT`) and one item of `inputs` for each entry its
+output lists (`MISSING_RECORD_INPUTS`), and writes it there.
 """
 
 from __future__ import annotations
@@ -17,16 +22,13 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from astra.contract import Contract
 from astra.diagnostics import Diagnostic, Location
-from astra.hashing import Digest, digest_file
+from astra.hashing import Digest
 from astra.load import ParseError, load_json
 from astra.sources.reader import CommitReader, Reader
-
-if TYPE_CHECKING:
-    from astra.plan import Result
 
 SPEC_VERSION = "0.1.0"
 """The version of the records this astra-tools writes."""
@@ -157,53 +159,6 @@ def write_record(path: Path, record: Record) -> None:
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
-
-
-def new_record(
-    result: Result,
-    *,
-    checkout: Path,
-    commit: str,
-    environment: str,
-    runner: Runner,
-    started: datetime | None = None,
-    finished: datetime | None = None,
-    got: Mapping[str, str] | None = None,
-) -> tuple[Record, ...]:
-    """The records of `result`'s run, one for each of its places, in their order, each with the
-    result's address at that place's name. `checkout` is the top of the checkout the recipe ran in,
-    which every path of the plan is measured from: the bytes it made are hashed at the first name's
-    default place, where `{output}` put them, and what it read through each entry of its output's
-    `inputs` at that entry's path or, for an entry that reads at a commit (`Read.commit`), where
-    `got` says the runner put the bytes it got, as for `plan.render_command`. Raises ValueError
-    where `got` doesn't give one. `commit` is the commit it ran from: a commit of the repository the
-    record is committed in, the one that holds the analysis the result belongs to (`result.owner`),
-    so a submodule's own commit for an analysis in a submodule, and the driver's for what a driver's
-    universes build, never `result.run_at` (`FALSE_RECORD`). `environment` is the IRI of the
-    environment it ran in, and `started` and `finished` when it did. Raises OSError where a file to
-    hash can't be read."""
-    made = digest_file(checkout / result.places[0].bytes)  # `{output}`, the first name's
-    inputs, got = [], got or {}
-    for read in result.inputs:
-        if read.commit is not None and read.entry not in got:
-            message = f"`{read.entry}` reads at {read.commit}: `got` gives no place for its bytes"
-            raise ValueError(message)
-        found = digest_file(checkout / (read.path if read.commit is None else got[read.entry]))
-        inputs.append(RecordedInput(read.entry, found.content_hash, found.size))
-    return tuple(
-        Record(
-            place.address,
-            made.content_hash,
-            made.size,
-            commit,
-            environment,
-            runner,
-            tuple(inputs),
-            None if started is None else timestamp(started),
-            None if finished is None else timestamp(finished),
-        )
-        for place in result.places
-    )
 
 
 def timestamp(moment: datetime) -> str:

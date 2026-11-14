@@ -1,7 +1,7 @@
 """The universe view: the stack as it is in one of the root's universes, each analysis built
 there or not, each decision, whether the universe uses it (Results *uses*) and its option
 selected, each output, whether it is built there (Results *built*), and its planned result
-there and its places; `api.view`, its shape `astra-universe-view/1`, and `astra view`.
+there and its places; `Resolved.view`, its shape `astra-universe-view/1`, and `astra view`.
 
 The stack is the worked example, with a `subanalysis` the root's universes drive, and an
 `other` they drive with nothing to set, as no universe of the root uses its decisions (Elements),
@@ -21,7 +21,7 @@ from astra.cli import main
 from astra.stack import Identity
 from astra.view import UniverseView
 from tests.conftest import MINIMAL, git, git_init, repository
-from tests.test_plan import FROM_COMMIT, LIB
+from tests.test_resolve import FROM_COMMIT, LIB
 
 ROOT = """\
 spec_version: "0.1.0"
@@ -137,7 +137,7 @@ def test_the_view_in_u1(top: Path) -> None:
     of the root uses its decisions and it has nothing to set (Elements). `u1` neither uses nor
     sets `d` and `e`. Its `out` and `out2`, built there, as what is built never turns on driving
     (Results *built*), have no result in `u1`."""
-    view = api.view("u1", top)
+    view = api.resolve(top).view("u1")
     assert (view.root, view.universe) == ("astra.yaml", "u1")
     assert state(view) == {
         ".": (
@@ -165,7 +165,7 @@ def test_the_view_in_u1(top: Path) -> None:
 
 def test_the_view_in_u2(top: Path) -> None:
     """`u2` selects `decision1: b`, and `output1`'s result there is `output1#u2`."""
-    root = state(api.view("u2", top))["."]
+    root = state(api.resolve(top).view("u2"))["."]
     assert root == (
         True,
         {"decision1": (True, "b")},
@@ -175,7 +175,7 @@ def test_the_view_in_u2(top: Path) -> None:
 
 def test_the_view_as_astra_universe_view_1(top: Path) -> None:
     """Each analysis with its fields as its file writes them."""
-    shape = api.view("u1", top).to_json()
+    shape = api.resolve(top).view("u1").to_json()
     assert [shape[key] for key in ("shape", "root", "universe")] == [
         "astra-universe-view/1",
         "astra.yaml",
@@ -233,7 +233,7 @@ def test_astra_view_shows_the_stack_in_one_universe(top: Path) -> None:
         "  out2         no planned result",
     ]
     shape = json.loads(astra("view", "u1", str(top), "--json").stdout)
-    assert shape == api.view("u1", top).to_json()
+    assert shape == api.resolve(top).view("u1").to_json()
 
 
 def test_astra_view_names_the_commit_of_an_analysis_from_a_commit(tmp_path: Path) -> None:
@@ -269,7 +269,7 @@ def test_an_invalid_analysis_has_no_view(tmp_path: Path) -> None:
     files |= {"subanalysis/astra.yaml": SUBANALYSIS, "other/astra.yaml": OTHER}
     folder = repository(tmp_path, files)
     with pytest.raises(api.InvalidAnalysisError):
-        api.view("u1", folder)
+        api.resolve(folder)
     result = astra("view", "u1", str(folder))
     assert result.exit_code == 1
     assert "MISSING_DECISION" in result.stdout

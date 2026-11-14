@@ -1,8 +1,9 @@
 """The check report as text: the errors of an analysis that breaks a `MUST`, as `validate`
 shows them; each place of each planned result, as its record's file, with its address and
-statuses, then why, as `line:col level CODE message`, and what each environment scheme answered
-for its record's environment; then the evidence, grouped under the astra.yaml that holds it,
-the root's first, as `validate`'s report is grouped by file."""
+statuses, then why, as `line:col level CODE message`, and the environment its record names with
+the runner that recorded it, which is the one to say what that environment holds; then the
+evidence, grouped under the astra.yaml that holds it, the root's first, as `validate`'s report
+is grouped by file."""
 
 from __future__ import annotations
 
@@ -46,12 +47,10 @@ def show(report: CheckReport) -> None:
             out.print(line)
             for reason in status.reasons:
                 out.print(_reason(reason))
-            for answer in status.environment:
-                assert status.record is not None  # only a record's environment is answered for
-                can = "can be recreated" if answer.recreatable else "can't be recreated"
-                out.print(Text(f"  {answer.scheme}: {status.record.environment} {can}"))
-                for held in answer.holds.splitlines():
-                    out.print(Text(f"    {held}"))
+            if status.record is not None:
+                runner = status.record.runner
+                made = f"  made in {status.record.environment} by {runner.id} {runner.version}"
+                out.print(Text(made, style="dim"))
     for file, grouped in groupby(report.evidence, key=lambda e: file_named(e.location)):
         out.print(Text(file, style="bold"))
         for evidence in grouped:

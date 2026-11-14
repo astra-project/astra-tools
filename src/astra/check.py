@@ -1,9 +1,10 @@
 """check(): each planned result's record and bytes statuses, at each of its places, and the
 statuses of the root's evidence and of a declared analysis's that cites a planned result.
 
-A checker reads records only through planned results: the plan (`plan.plan`) gives each, each
-after what it reads, with its places, what each entry of its output's `inputs` reads and the
-option each entry of its `decisions` selects. At each place:
+A checker reads records only through planned results: the resolved analysis
+(`resolve.resolve`) gives each, each after what it reads, with its places, what each entry of
+its output's `inputs` reads and the option each entry of its `decisions` selects. At each
+place:
 
 - the record: none is there (`MISSING_RECORD`); it breaks a parse or schema rule, by the record
   schema its minor version picks (`INVALID_RECORD`, each code it breaks a reason); its `address`
@@ -24,12 +25,16 @@ analysis it belongs to, and the hashes of the results it reads are taken from th
 only one that a planned result reads gets a bytes status.
 Evidence gets the status of the records it cites (`STALE_EVIDENCE`), through the case a switch
 it names takes in each of the root's universes (Results *Evidence*): the root's, and each item
-of a declared analysis's evidence that cites a planned result. Each record's environment gets
-what each registered scheme answered for it.
+of a declared analysis's evidence that cites a planned result.
+
+Each `STALE_RESULT` says what changed (`Reason.change`), and so whether the result is stale in
+itself or only through a result it reads. What to build of what isn't unchanged is a runner's
+to say, and `Status.unchanged_given` answers the one question it then has of a result that
+only reads what it rebuilt: whether it reads the bytes its record gives.
 
 A stack that breaks a `MUST` is checked too: every result whose planning is determined
-(`plan.plan`) gets its statuses, and so does the evidence citing only such results, while the
-report holds the validation errors (`api.check`).
+(`resolve.resolve`) gets its statuses, and so does the evidence citing only such results, while
+the report holds the validation errors (`api.check`).
 """
 
 from __future__ import annotations
@@ -39,20 +44,30 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from astra import environments, hashing
+from astra import hashing
 from astra.contract import Contract
 from astra.diagnostics import Catalogue, Diagnostic, Level, Location
-from astra.plan import Key, Read, RequestError, Result, plan, root_output, root_universe, selected
 from astra.records import Record, read_record
+from astra.resolve import Key, Read, Resolved, Result, selected
 from astra.rules.context import Context
 from astra.sources import standins
 from astra.sources.git import Repository
 from astra.sources.reader import CommitReader, in_repository
 from astra.sources.remote import Remotes
-from astra.stack import Element, Identity, Member, Resolution, Stack, bind
-from astra.universes import Place, Selection, Step, Through, along, read_in
+from astra.stack import Element, Identity, Member, Resolution, bind
+from astra.universes import (
+    Place,
+    RequestError,
+    Selection,
+    Step,
+    Through,
+    along,
+    read_in,
+    root_output,
+    root_universe,
+)
 
-SHAPE = "astra-check-report/1"
+SHAPE = "astra-check-report/2"
 
 CODES = frozenset(
     {
@@ -73,6 +88,14 @@ BytesStatus = Literal["present", "absent"]
 _WORST: tuple[RecordStatus, ...] = ("missing", "stale", "unchanged")
 """The record statuses, the worst first."""
 
+Change = Literal["declaration", "selection", "switch", "input", "result", "commit"]
+"""What a `STALE_RESULT` found changed since the record's commit, of what a result is made from
+(Results *made from*): its output's `declaration` (command, inputs, decisions, format); the
+option a decision of its selects, its `selection`; a `switch` an entry reads through, its
+decision, the option selected for it or the case it takes; the content of an `input`; a `result`
+it reads, which is stale, missing or was made again with other bytes; or its record's `commit`,
+which can't be read, or has no such output, so that nothing can be compared."""
+
 
 @dataclass(frozen=True)
 class Reason:
@@ -84,6 +107,9 @@ class Reason:
     location: Location  # the record, or the place in it of a parse or schema error; the bytes'
     # default place; or the evidence's `artifact`
     breaks: str | None = None  # for INVALID_RECORD, the parse or schema code the record breaks
+    change: Change | None = None  # for STALE_RESULT, what changed
+    entry: str | None = None  # for a `switch`, an `input` or a `result`, the entry of the
+    # output's `inputs` that reads it, as written
 
 
 @dataclass(frozen=True)
@@ -97,8 +123,28 @@ class Status:
     committed: bool  # git has the record at the place as it is
     reasons: tuple[Reason, ...]
     record: Record | None  # the record there, where it is the result's: unchanged or stale
-    environment: tuple[environments.Answer, ...]  # what each registered scheme answered for the
-    # record's environment
+
+    def unchanged_given(self, read: Mapping[str, hashing.Digest]) -> bool:
+        """Whether the result would be `unchanged` at this place were each result it reads
+        unchanged, with the bytes `read` gives by entry of its output's `inputs`: a result made
+        from a stale or missing one is stale only until that one is rebuilt with the hash it
+        recorded (Results *made from*).
+
+        A runner that rebuilds what a result reads asks this once those are built, of the
+        status it had before, and builds the result only where the answer is no: it needs no
+        second check, and nothing but the record. False where there is no record that is the
+        result's, where anything else it is made from has changed, where a result it reads isn't
+        unchanged and `read` doesn't give it, and where `read` gives other bytes than the record
+        does for an entry."""
+        if self.record is None:
+            return False
+        for reason in self.reasons:
+            if reason.code == "ABSENT_RESULT":  # of its bytes, not of what it is made from
+                continue
+            if reason.change != "result" or reason.entry not in read:
+                return False
+        recorded = {item.entry: item.digest for item in self.record.inputs}
+        return all(recorded.get(entry) == digest for entry, digest in read.items())
 
 
 @dataclass(frozen=True)
@@ -127,9 +173,11 @@ class CheckReport:
 
     root: str  # the root's astra.yaml, as a Location's `file` names it
     at: str  # "worktree", or the commit the stack, its records and bytes are read at
-    results: tuple[Checked, ...]  # in the plan's order
+    results: tuple[Checked, ...]  # each after every result it reads
     evidence: tuple[EvidenceStatus, ...]
     errors: tuple[Diagnostic, ...] = ()  # the `MUST`s the analysis breaks, as `validate` finds
+    resolved: Resolved | None = None  # the analysis as it was resolved to be checked, where it
+    # is valid: None where it breaks a `MUST`
 
     @property
     def ok(self) -> bool:
@@ -141,7 +189,7 @@ class CheckReport:
         return not self.errors and all(status == "unchanged" for status in statuses)
 
     def to_json(self) -> dict[str, Any]:
-        """The report as `astra-check-report/1`."""
+        """The report as `astra-check-report/2`."""
         # The exact JSON form.
         return {
             "shape": SHAPE,
@@ -162,7 +210,8 @@ class CheckReport:
                             "bytes_status": status.bytes_status,
                             "committed": status.committed,
                             "reasons": [asdict(reason) for reason in status.reasons],
-                            "environment": [asdict(answer) for answer in status.environment],
+                            # `record` is the place's: the path of its record's file.
+                            "recorded": None if status.record is None else status.record.to_json(),
                         }
                         for status in checked.statuses
                     ],
@@ -184,24 +233,25 @@ class CheckReport:
 
 
 def check(
-    stack: Stack,
+    resolved: Resolved,
     universes: Iterable[str] | None = None,
     outputs: Iterable[str] | None = None,
     remotes: Remotes | None = None,
     errors: tuple[Diagnostic, ...] = (),
 ) -> CheckReport:
-    """The statuses of every planned result of `stack` at each of its places, and of the root's
-    evidence and each item of a declared analysis's evidence that cites a planned result, its
-    records and bytes read where the stack is: in the working tree, or at the commit its root is
-    read at. Where `stack` breaks a `MUST`, whose `errors` the report holds, only the results
-    whose planning is determined, and the evidence that cites only such results, get statuses.
+    """The statuses of every planned result of `resolved` at each of its places, and of the
+    root's evidence and each item of a declared analysis's evidence that cites a planned result,
+    its records and bytes read where its stack is: in the working tree, or at the commit its
+    root is read at. Where the stack breaks a `MUST`, whose `errors` the report holds, only the
+    results whose planning is determined, and the evidence that cites only such results, get
+    statuses.
 
     `universes`, ids of the root's universes, and `outputs`, addresses read in the root's file,
     only narrow the planned results reported to those built in those universes and of those
     outputs; the evidence is not narrowed. Commits are got from remotes through `remotes`.
     Raises RequestError where a universe or an output asked for isn't there, or is a switch, or
     an output asked for has no planned result there."""
-    results = plan(stack).results
+    stack, results = resolved.context.stack, resolved.results
     narrowed = None if universes is None else {root_universe(stack, id_) for id_ in universes}
     named = {root_output(stack, address): address for address in outputs or ()}
     kept = [
@@ -217,21 +267,15 @@ def check(
                 f"`{address}` has no planned result{where}: a check covers only the planned "
                 "results, which `astra check` lists"
             )
-    catalogue = Catalogue.load()
-    checker = _Checker(stack, catalogue, Contract.load(catalogue), remotes or Remotes())
-    # Of the results of an analysis from a commit, only those a planned result reads get a bytes
-    # status, and so ABSENT_RESULT.
-    read = {
-        (entry.result.output, entry.result.universe)
-        for user in results
-        for entry in user.inputs
-        if entry.result is not None
-    }
+    context = resolved.context
+    checker = _Checker(context, Contract.load(context.catalogue), remotes or Remotes())
+    # Of the results from a commit, only those a planned result reads get a bytes status, and
+    # so ABSENT_RESULT.
+    read = {entry.result for user in results for entry in user.inputs if entry.result is not None}
     statuses: dict[Key, tuple[Status, ...]] = {}
     for result in results:
-        key = (result.output, result.universe)
-        has_bytes = not result.read_only or key in read
-        statuses[key] = tuple(
+        has_bytes = not result.from_commit or result.key in read
+        statuses[result.key] = tuple(
             checker.place(result, place, statuses, has_bytes) for place in result.places
         )
     evidence = (
@@ -242,9 +286,10 @@ def check(
     return CheckReport(
         stack.analyses[stack.root].file,
         stack.root.commit or "worktree",
-        tuple(Checked(result, statuses[result.output, result.universe]) for result in kept),
+        tuple(Checked(result, statuses[result.key]) for result in kept),
         tuple(status for status in evidence if status is not None),
         errors,
+        None if errors else resolved,
     )
 
 
@@ -263,25 +308,27 @@ class _Checker:
     """What one check reads, each once: the stacks bound at the records' commits, and HEAD of
     each repository that holds a record of the working tree."""
 
-    def __init__(
-        self, stack: Stack, catalogue: Catalogue, contract: Contract, remotes: Remotes
-    ) -> None:
-        self.stack = stack
-        self.catalogue = catalogue
+    def __init__(self, context: Context, contract: Contract, remotes: Remotes) -> None:
+        self.context = context
+        self.stack = context.stack
+        self.catalogue: Catalogue = context.catalogue
         self.contract = contract
         self.remotes = remotes
-        self.context = Context(stack, catalogue)
         self.standins = standins.registered()
-        self.schemes = environments.registered()
-        self._answers: dict[str, tuple[environments.Answer, ...]] = {}
         self._bound: dict[tuple[Repository, str, str], Context | str] = {}
         self._heads: dict[Repository, CommitReader | None] = {}
 
     def reason(
-        self, code: str, message: str, location: Location, breaks: str | None = None
+        self,
+        code: str,
+        message: str,
+        location: Location,
+        breaks: str | None = None,
+        change: Change | None = None,
+        entry: str | None = None,
     ) -> Reason:
         """`code` broken, at the level its rule's `MUST` or `SHOULD` gives."""
-        return Reason(code, self.catalogue.level(code), message, location, breaks)
+        return Reason(code, self.catalogue.level(code), message, location, breaks, change, entry)
 
     def place(
         self,
@@ -319,28 +366,23 @@ class _Checker:
             then = self._then(result, place, found)
             if isinstance(then, str):  # stale, since what it is compared with is gone
                 if not reasons:
-                    reasons.append(self.reason("STALE_RESULT", then, at))
+                    reasons.append(self.reason("STALE_RESULT", then, at, change="commit"))
                     status, record = "stale", found
             else:
                 reasons.extend(self._inputs(found, then, at))
                 if not reasons:
                     changes = self._changes(result, found, then, statuses)
-                    reasons.extend(self.reason("STALE_RESULT", change, at) for change in changes)
+                    reasons.extend(
+                        self.reason("STALE_RESULT", message, at, change=change, entry=entry)
+                        for change, entry, message in changes
+                    )
                     status, record = ("stale" if changes else "unchanged"), found
         bytes_status: BytesStatus | None = None
         if has_bytes:
             bytes_status, absent = self._bytes(member, place, record)
             reasons.extend(absent)
         committed = found is not None and self._committed(member, place.record)
-        answers = () if record is None else self._environment(record.environment)
-        return Status(place, status, bytes_status, committed, tuple(reasons), record, answers)
-
-    def _environment(self, iri: str) -> tuple[environments.Answer, ...]:
-        """What each registered scheme that recognises the environment `iri` answered for it."""
-        # What a scheme answers, and where the report shows it.
-        if iri not in self._answers:
-            self._answers[iri] = environments.answers(iri, self.schemes)
-        return self._answers[iri]
+        return Status(place, status, bytes_status, committed, tuple(reasons), record)
 
     def _then(self, result: Result, place: Place, record: Record) -> _Then | str:
         """`result` as the commit `record` names has it: the stack bound there, from the folder
@@ -419,39 +461,45 @@ class _Checker:
         record: Record,
         then: _Then,
         statuses: Mapping[Key, tuple[Status, ...]],
-    ) -> list[str]:
-        """What has changed, since the commit `record` names, of what `STALE_RESULT` compares:
-        the output's declaration, the options its decisions select in its universe, for each
-        switch an entry reads through the decision it switches on, the option selected for it
-        and the case it takes, the content of its inputs, and the results it reads
+    ) -> list[tuple[Change, str | None, str]]:
+        """What has changed, since the commit `record` names, of what `STALE_RESULT` compares,
+        each as what changed, the entry of the output's `inputs` it is about, if any, and the
+        message: the output's declaration, the options its decisions select in its universe, for
+        each switch an entry reads through the decision it switches on, the option selected for
+        it and the case it takes, the content of its inputs, and the results it reads
         (Results *made from*)."""
         commit = record.commit[:12]
         now = self.stack.analysis(result.output.analysis).outputs[result.output.id]
         was = then.context.stack.analysis(then.output.analysis).outputs[then.output.id]
-        changes = []
+        changes: list[tuple[Change, str | None, str]] = []
         assert now.recipe is not None and was.recipe is not None  # a result's output's
         if now.recipe.command != was.recipe.command:
-            changes.append(f"its recipe's command isn't the one it had at {commit}")
+            message = f"its recipe's command isn't the one it had at {commit}"
+            changes.append(("declaration", None, message))
         if now.inputs != was.inputs:
-            changes.append(
+            message = (
                 f"its inputs are {_listed(now.inputs)}, in that order, where they were "
                 f"{_listed(was.inputs)} at {commit}"
             )
+            changes.append(("declaration", None, message))
         if set(now.decisions) != set(was.decisions):
-            changes.append(
+            message = (
                 f"its decisions are {_listed(now.decisions)}, where they were "
                 f"{_listed(was.decisions)} at {commit}"
             )
+            changes.append(("declaration", None, message))
         if now.format != was.format:
-            changes.append(f"its format is `{now.format}`, where it was `{was.format}` at {commit}")
+            message = f"its format is `{now.format}`, where it was `{was.format}` at {commit}"
+            changes.append(("declaration", None, message))
         before = selected(then.context.written[then.output], then.selection)
         for written, option in result.decisions.items():
             if written in before and before[written] != option:
                 assert result.universe is not None  # an output built once lists no decisions
-                changes.append(
+                message = (
                     f"`{written}` selects {_option(option)} in `{result.universe.id}`, where it "
                     f"selected {_option(before[written])} at {commit}"
                 )
+                changes.append(("selection", None, message))
         recorded = {item.entry: item for item in record.inputs}
         entries = [
             entry for entry in self.context.written[result.output] if entry.field == "inputs"
@@ -472,19 +520,24 @@ class _Checker:
                 None if earlier is None else then.context.meaning.through(earlier, then.universe)
             )
             changes.extend(
-                _switched(read.entry, through, read_then, self.context, then.context, commit)
+                ("switch", read.entry, message)
+                for message in _switched(
+                    read.entry, through, read_then, self.context, then.context, commit
+                )
             )
             if read.result is None:
                 found = self._content(through.target.analysis, read)
                 if found is None:  # stale, since it can't be compared
-                    changes.append(
+                    message = (
                         f"the content of `{read.entry}` can't be read at {read.path}: no file "
                         "is there, or only a stand-in that gives no SHA-256"
                     )
+                    changes.append(("input", read.entry, message))
                 elif found != item.digest:
-                    changes.append(
+                    message = (
                         f"the content of `{read.entry}`, {read.path}, isn't what the recipe read"
                     )
+                    changes.append(("input", read.entry, message))
                 continue
             status = _read(read, statuses)
             address = status.place.address
@@ -493,9 +546,10 @@ class _Checker:
             )
             if status.record_status != "unchanged":
                 how = "has no valid record" if status.record_status == "missing" else "is stale"
-                changes.append(f"{what}, {how}")
+                changes.append(("result", read.entry, f"{what}, {how}"))
             elif status.record is not None and status.record.digest != item.digest:
-                changes.append(f"{what}, was made again since, with other bytes than it read")
+                message = f"{what}, was made again since, with other bytes than it read"
+                changes.append(("result", read.entry, message))
         return changes
 
     def _content(self, analysis: Identity, read: Read) -> hashing.Digest | None:
@@ -692,10 +746,9 @@ def _worst(statuses: Iterable[RecordStatus]) -> RecordStatus:
 
 
 def _read(read: Read, statuses: Mapping[Key, tuple[Status, ...]]) -> Status:
-    """The status of the place whose bytes `read` reads (`plan.Read.place`)."""
-    done = read.result
-    assert done is not None
-    return next(s for s in statuses[done.output, done.universe] if s.place == read.place)
+    """The status of the place whose bytes `read` reads (`resolve.Read.place`)."""
+    assert read.result is not None
+    return next(s for s in statuses[read.result] if s.place == read.place)
 
 
 def _location(member: Member, path: str) -> Location:

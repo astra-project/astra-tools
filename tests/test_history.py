@@ -23,7 +23,7 @@ from astra.history import Version
 from astra.records import Record
 from tests.conftest import ENVIRONMENT, MINIMAL, build, git, repository
 from tests.test_check import FROM_COMMIT, remake
-from tests.test_plan import LIB
+from tests.test_resolve import LIB
 from tests.test_validate import WORKED_EXAMPLE
 
 OTHER = "urn:example:environment2"
@@ -278,7 +278,7 @@ def test_get_at_a_revision_that_names_no_commit(recorded: Recorded) -> None:
 
 
 def test_an_invalid_analysis_has_no_history(tmp_path: Path) -> None:
-    """Like `plan`, it raises `InvalidAnalysisError`; `check` gives what statuses it can."""
+    """Like `resolve`, it raises `InvalidAnalysisError`; `check` gives what statuses it can."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL.replace("type: metric", "type: plot")})
     with pytest.raises(api.InvalidAnalysisError):
         api.history(top)

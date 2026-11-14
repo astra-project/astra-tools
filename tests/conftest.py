@@ -4,16 +4,18 @@ astra-spec's conformance suite and examples are in `tests/spec.py`."""
 from __future__ import annotations
 
 import importlib.metadata
+import posixpath
 import subprocess
-import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 import pytest
 
 from astra import api
-from astra.plan import Result
-from astra.records import Runner, new_record, write_record
+from astra.grammar import fill
+from astra.hashing import digest_bytes, digest_file
+from astra.records import Record, RecordedInput, Runner, write_record
+from astra.resolve import Read, Result
 
 MINIMAL = """\
 spec_version: "0.1.0"
@@ -105,6 +107,27 @@ def analysis(folder: Path, text: str = MINIMAL) -> Path:
     return folder
 
 
+def rendered(result: Result) -> str:
+    """`result`'s command as a runner might fill it (`grammar.fill`), with every path relative to
+    the folder the recipe runs in, in one checkout: what each entry of its output's `inputs`
+    reads, the option each entry of its `decisions` selects, and the first name's default place.
+    What an entry reads at a commit is no file of the checkout, so it is written
+    `<commit>:<path>`, git's name for it."""
+
+    def at(path: str) -> str:
+        return posixpath.relpath(path, result.workdir or ".")
+
+    def where(read: Read) -> str:
+        return at(read.path) if read.commit is None else f"{read.commit}:{read.path}"
+
+    return fill(
+        result.command,
+        inputs={read.entry: where(read) for read in result.inputs},
+        decisions=result.decisions,
+        output=at(result.places[0].bytes),
+    )
+
+
 RUNNER = Runner("astra-tools-tests", "1")
 ENVIRONMENT = "urn:example:environment1"
 
@@ -117,30 +140,40 @@ def build(
     made: Callable[[Result], bytes] = lambda result: f"{result.places[0].address}\n".encode(),
 ) -> tuple[Result, ...]:
     """Build the analysis in `folder`, `top` by default, in the working tree whose top is `top`,
-    as a runner would but without running a recipe: each planned result it doesn't read through
-    a record, in the plan's order, gets the bytes `made` gives it at each of its default places,
-    and a record from `records.new_record` at each of its places, naming `commit` (HEAD by
-    default) as the commit its recipe ran from. What an entry reads at a commit is got through
-    `api.history`, outside the checkout. Nothing is committed. Gives the plan's results."""
+    as a runner would but without running a recipe: each planned result that isn't a result from
+    a commit, each after what it reads, gets the bytes `made` gives it at each of its default
+    places, and a record at each of its places, naming `commit` (HEAD by default) as the commit
+    its recipe ran from. What an entry reads at a commit is got through `api.history`. Nothing is
+    committed. Gives the planned results."""
     commit = commit or git(top, "rev-parse", "HEAD").strip()
-    results = api.plan(folder or top).results
-    kept = Path(tempfile.mkdtemp(prefix="got-"))
+    results = api.resolve(folder or top).results
     for result in results:
-        if result.read_only:
+        if result.from_commit:
             continue
+        data = made(result)
         for place in result.places:
             (top / place.bytes).parent.mkdir(parents=True, exist_ok=True)
-            (top / place.bytes).write_bytes(made(result))
-        got = {}
-        for read in result.inputs:
-            if read.commit is not None and read.place is not None:
-                data = api.history(folder or top).get(read.place.address, read.commit)
-                path = kept / str(len(got))
-                path.write_bytes(data)
-                got[read.entry] = str(path)
-        records = new_record(
-            result, checkout=top, commit=commit, environment=ENVIRONMENT, runner=RUNNER, got=got
-        )
-        for place, record in zip(result.places, records, strict=True):
+            (top / place.bytes).write_bytes(data)
+        read = []
+        for entry in result.inputs:
+            if entry.commit is None:
+                found = digest_file(top / entry.path)
+            else:
+                assert entry.place is not None  # an input read at a commit isn't built from here
+                found = digest_bytes(
+                    api.history(folder or top).get(entry.place.address, entry.commit)
+                )
+            read.append(RecordedInput(entry.entry, found.content_hash, found.size))
+        hashed = digest_bytes(data)
+        for place in result.places:
+            record = Record(
+                place.address,
+                hashed.content_hash,
+                hashed.size,
+                commit,
+                ENVIRONMENT,
+                RUNNER,
+                tuple(read),
+            )
             write_record(top / place.record, record)
     return results

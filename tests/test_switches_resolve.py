@@ -1,6 +1,6 @@
-"""Switches in the plan, the view and the check: a result read
-through a switch (Elements *takes*; Results *plans*, *made from*, *Evidence*), the plan's note
-on an output a switch leaves unbuilt, what a universe uses and what is built there, and what a
+"""Switches in the resolved analysis, the view and the check: a result read
+through a switch (Elements *takes*; Results *plans*, *made from*, *Evidence*), the note on an
+output a switch leaves unbuilt, what a universe uses and what is built there, and what a
 switch makes stale.
 
 The stacks are `tests.test_switches`' running example, its nested switches and its switch
@@ -19,10 +19,10 @@ from click.testing import CliRunner, Result
 from astra import api
 from astra.check import CheckReport
 from astra.cli import main
-from astra.plan import Plan, render_command
-from astra.plan import Result as Planned
+from astra.resolve import Resolved
+from astra.resolve import Result as Planned
 from astra.stack import Element
-from tests.conftest import build, repository
+from tests.conftest import build, rendered, repository
 from tests.test_switches import CHOOSING_FILES, NESTED_FILES, ROOT, RUNNING_FILES, variant
 
 
@@ -30,14 +30,14 @@ def astra(*args: str) -> Result:
     return CliRunner().invoke(main, list(args))
 
 
-def results(plan: Plan) -> set[tuple[str, str]]:
+def results(resolved: Resolved) -> set[tuple[str, str]]:
     """Each result: the analysis it belongs to, and its addresses (Results)."""
-    return {(str(r.owner), ", ".join(p.address for p in r.places)) for r in plan.results}
+    return {(str(r.owner), ", ".join(p.address for p in r.places)) for r in resolved.results}
 
 
-def result(plan: Plan, address: str) -> Planned:
+def result(resolved: Resolved, address: str) -> Planned:
     """The result whose first place has `address`."""
-    (found,) = [r for r in plan.results if r.places[0].address == address]
+    (found,) = [r for r in resolved.results if r.places[0].address == address]
     return found
 
 
@@ -46,14 +46,14 @@ def running(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return repository(tmp_path_factory.mktemp("running"), RUNNING_FILES)
 
 
-# --- C. the plan ---
+# --- C. the resolved analysis ---
 
 
 def test_the_running_example_plans_what_results_lists(running: Path) -> None:
     """Results: the planned results are `output2`, `output1` in `u1` and `u2`, `output6` in
     `u1`, `stage.output3` in `u1`, `u2` and `v1`, and `upstream.output4`; `output6` isn't built
     in `u2`, where `switch1` has no case for `a`."""
-    assert results(api.plan(running)) == {
+    assert results(api.resolve(running)) == {
         (".", "output2"),
         (".", "output1#u1"),
         (".", "output1#u2"),
@@ -69,8 +69,8 @@ def test_an_entry_naming_a_switch_reads_the_case_it_takes(running: Path) -> None
     """Elements: where `decision1` selects `b`, `switch1` takes `stage.output3`, and
     `{inputs.switch1}` is the path of its result there. The read says which case it went
     through (`via`), as written."""
-    plan = api.plan(running)
-    six = result(plan, "output6#u1")
+    resolved = api.resolve(running)
+    six = result(resolved, "output6#u1")
     (read,) = six.inputs
     assert (read.entry, read.path, read.commit, read.via) == (
         "switch1",
@@ -78,57 +78,27 @@ def test_an_entry_naming_a_switch_reads_the_case_it_takes(running: Path) -> None
         None,
         ("stage.output3",),
     )
-    assert read.result == result(plan, "stage.output3#u1")
-    assert render_command(six, running) == (
+    assert read.result == result(resolved, "stage.output3#u1").key
+    assert rendered(six) == (
         "python src/output6.py 'results/u1/stage.output3.csv' 'a' 'results/u1/output6.png'"
     )
-    assert [read.via for read in result(plan, "output1#u1").inputs] == [(), (), ()]
+    assert [read.via for read in result(resolved, "output1#u1").inputs] == [(), (), ()]
 
 
-def test_the_plan_notes_an_output_a_switch_leaves_unbuilt(running: Path) -> None:
-    """The plan says which outputs aren't built in which universe, and why: the
+def test_an_output_a_switch_leaves_unbuilt_is_noted(running: Path) -> None:
+    """The resolved analysis says which outputs aren't built in which universe, and why: the
     switch with no case there, and the option its decision selects. A missing case breaks no
-    rule."""
-    (note,) = [n for n in api.plan(running).notes if n.kind == "not_built"]
-    assert note.location is not None
+    rule. A note of another kind names no universe, switch or option."""
+    resolved = api.resolve(running)
+    (note,) = [n for n in resolved.notes if n.kind == "not_built"]
     assert (note.location.file, note.location.pointer) == ("astra.yaml", "/outputs/output6")
     assert note.universes == (Element(ROOT, "universe", "u2"),)
     assert (note.switch, note.option) == (Element(ROOT, "switch", "switch1"), "a")
-    assert (note.results, note.built) == ((), True)
+    assert note.built
     assert "has no case" in note.message
-
-
-def test_the_plan_as_astra_plan_1_reads_through_switches(running: Path) -> None:
-    """Each read says which cases it went through (`via`), and each note which
-    universes, switch and option it concerns, none for a note of another kind."""
-    shape = api.plan(running).to_json()
-    index = {
-        ", ".join(place["address"] for place in found["places"]): at
-        for at, found in enumerate(shape["results"])
-    }
-    assert shape["results"][index["output6#u1"]]["inputs"] == [
-        {
-            "entry": "switch1",
-            "path": "results/u1/stage.output3.csv",
-            "commit": None,
-            "result": index["stage.output3#u1"],
-            "via": ["stage.output3"],
-        }
-    ]
-    assert [read["via"] for read in shape["results"][index["output1#u1"]]["inputs"]] == [[]] * 3
-    (note,) = [n for n in shape["notes"] if n["kind"] == "not_built"]
-    root = {"folder": "", "commit": None}
-    assert {key: note[key] for key in ("universes", "switch", "option", "results", "built")} == {
-        "universes": [{"analysis": root, "id": "u2"}],
-        "switch": {"analysis": root, "id": "switch1"},
-        "option": "a",
-        "results": [],
-        "built": True,
-    }
-    assert note["location"]["pointer"] == "/outputs/output6"
-    others = [n for n in shape["notes"] if n["kind"] != "not_built"]
+    others = [n for n in resolved.notes if n.kind != "not_built"]
     assert others
-    assert all((n["universes"], n["switch"], n["option"]) == ([], None, None) for n in others)
+    assert all((n.universes, n.switch, n.option) == ((), None, None) for n in others)
 
 
 @pytest.fixture(scope="module")
@@ -140,8 +110,8 @@ def test_nested_switches_read_through_each_case_they_take(nested: Path) -> None:
     """Elements: a case that names a switch nests the two, and reading the outer reads what the
     inner takes, in the universe the case is read in; a pinned case reads its target as built in
     its pin's universe; a case on an input reads the input's file."""
-    plan = api.plan(nested)
-    assert results(plan) == {
+    resolved = api.resolve(nested)
+    assert results(resolved) == {
         (".", "reader#ua"),
         (".", "reader#ub"),
         (".", "reader#uc"),
@@ -151,7 +121,7 @@ def test_nested_switches_read_through_each_case_they_take(nested: Path) -> None:
     }
     reads = {
         found.places[0].address: [(read.entry, read.path, read.via) for read in found.inputs]
-        for found in plan.results
+        for found in resolved.results
         if found.output.id == "reader"
     }
     assert reads == {
@@ -160,9 +130,9 @@ def test_nested_switches_read_through_each_case_they_take(nested: Path) -> None:
         "reader#uc": [("outer", "data/input1.csv", ("input1",))],
         "reader#w": [("outer", "data/input1.csv", ("inner", "input1"))],
     }
-    assert result(plan, "reader#ub").inputs[0].result == result(plan, "fit#w")
-    assert result(plan, "reader#uc").inputs[0].result is None
-    assert render_command(result(plan, "reader#uc"), nested) == (
+    assert result(resolved, "reader#ub").inputs[0].result == result(resolved, "fit#w").key
+    assert result(resolved, "reader#uc").inputs[0].result is None
+    assert rendered(result(resolved, "reader#uc")) == (
         "python read.py 'data/input1.csv' 'results/uc/reader.csv'"
     )
 
@@ -208,11 +178,10 @@ def test_an_output_a_case_names_is_planned_only_where_it_is_taken(tmp_path: Path
     """Results *plans*: the driving analysis plans from its own switches that nothing of its own
     reads, and from its own outputs that no case of its own names, so `sw` plans the case it
     takes where it is built, and `out_a`, `out_b` and `out_c` only there. `out_c`, never taken,
-    has no planned result, which the plan notes."""
-    plan = api.plan(repository(tmp_path, {"astra.yaml": TAKEN}))
-    assert results(plan) == {(".", "out_a#u1"), (".", "out_b#u2")}
-    (note,) = [n for n in plan.notes if n.kind == "unplanned"]
-    assert note.location is not None
+    has no planned result, which is noted."""
+    resolved = api.resolve(repository(tmp_path, {"astra.yaml": TAKEN}))
+    assert results(resolved) == {(".", "out_a#u1"), (".", "out_b#u2")}
+    (note,) = [n for n in resolved.notes if n.kind == "unplanned"]
     assert note.location.pointer == "/outputs/out_c"
     assert "only a case of `sw`" in note.message
     assert note.built
@@ -225,14 +194,14 @@ def test_an_output_a_case_names_is_built_everywhere_once_cited(tmp_path: Path) -
         "findings:\n  finding1:\n    claim: c is reported.\n    evidence:\n"
         "      - artifact: out_c\n"
     )
-    plan = api.plan(repository(tmp_path, {"astra.yaml": text}))
-    assert results(plan) == {
+    resolved = api.resolve(repository(tmp_path, {"astra.yaml": text}))
+    assert results(resolved) == {
         (".", "out_a#u1"),
         (".", "out_b#u2"),
         (".", "out_c#u1"),
         (".", "out_c#u2"),
     }
-    assert [n for n in plan.notes if n.kind == "unplanned"] == []
+    assert [n for n in resolved.notes if n.kind == "unplanned"] == []
 
 
 @pytest.fixture(scope="module")
@@ -243,9 +212,9 @@ def choosing(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_a_switch_between_analyses_plans_the_one_it_takes(choosing: Path) -> None:
     """Elements: a switch can choose between analyses. `refined` reads `fast.fit` in `q` and
     `slow.fit` in `c`; in `m`, `model` has no case for `manual`, so nothing is planned there,
-    and the plan says so; `report` and `tools.helper` are built once."""
-    plan = api.plan(choosing)
-    assert results(plan) == {
+    which is noted; `report` and `tools.helper` are built once."""
+    resolved = api.resolve(choosing)
+    assert results(resolved) == {
         (".", "refined#q"),
         (".", "fast.fit#q"),
         (".", "refined#c"),
@@ -253,22 +222,21 @@ def test_a_switch_between_analyses_plans_the_one_it_takes(choosing: Path) -> Non
         (".", "report"),
         ("tools", "helper"),
     }
-    assert [r for r in plan.results if r.universe is not None and r.universe.id == "m"] == []
-    assert [(read.entry, read.path, read.via) for read in result(plan, "refined#q").inputs] == [
+    assert [r for r in resolved.results if r.universe is not None and r.universe.id == "m"] == []
+    assert [(read.entry, read.path, read.via) for read in result(resolved, "refined#q").inputs] == [
         ("model", "results/q/fast.fit.csv", ("fast.fit",)),
         ("tools.helper", "tools/results/helper.csv", ()),
     ]
-    (note,) = [n for n in plan.notes if n.kind == "not_built"]
-    assert note.location is not None
+    (note,) = [n for n in resolved.notes if n.kind == "not_built"]
     assert note.location.pointer == "/outputs/refined"
     assert note.universes == (Element(ROOT, "universe", "m"),)
     assert (note.switch, note.option) == (Element(ROOT, "switch", "model"), "manual")
 
 
 def test_a_switch_asked_for_is_a_request_error(running: Path) -> None:
-    """Elements: a switch has no result of its own, so it can't be asked for."""
+    """Elements: a switch has no result of its own, so a check can't be narrowed to one."""
     with pytest.raises(api.RequestError, match="is a switch"):
-        api.plan(running, outputs=["switch1"])
+        api.check(running, outputs=["switch1"])
 
 
 GAP = """\
@@ -302,15 +270,13 @@ def test_an_output_built_in_none_of_the_roots_universes_has_no_result_to_give(
     tmp_path: Path,
 ) -> None:
     """Results *built*: `reader` reads `gap` without a pin, and `gap` has no case for `a`, so it
-    has no planned result, which the plan notes twice, and asked for, it has none
-    to give; `base`, which only a case of `gap` names, is planned only where something planned
-    reads it."""
+    has no planned result, which is noted twice, and a check narrowed to it has none to give;
+    `base`, which only a case of `gap` names, is planned only where something planned reads
+    it."""
     top = repository(tmp_path, {"astra.yaml": GAP})
-    plan = api.plan(top)
-    assert results(plan) == set()
-    unplanned = {
-        n.location and n.location.pointer: n.message for n in plan.notes if n.kind == "unplanned"
-    }
+    resolved = api.resolve(top)
+    assert results(resolved) == set()
+    unplanned = {n.location.pointer: n.message for n in resolved.notes if n.kind == "unplanned"}
     assert unplanned == {
         "/outputs/base": "`base` has no planned result: only a case of `gap` names it, so it is "
         "planned only where something planned reads it, and nothing does, so a check of the root "
@@ -318,14 +284,14 @@ def test_an_output_built_in_none_of_the_roots_universes_has_no_result_to_give(
         "/outputs/reader": "`reader` has no planned result: it is built in none of the root's "
         "universes, so a check of the root never covers it",
     }
-    (note,) = [n for n in plan.notes if n.kind == "not_built"]
+    (note,) = [n for n in resolved.notes if n.kind == "not_built"]
     assert note.message == (
         "`reader` isn't built in `u1`: `gap` has no case there for `a`, the option its decision "
         "selects"
     )
-    with pytest.raises(api.RequestError, match="^`reader` has no result in the root's universes"):
-        api.plan(top, outputs=["reader"])
-    assert results(api.plan(top, outputs=["base"])) == {(".", "base")}
+    for output in ("reader", "base"):
+        with pytest.raises(api.RequestError, match=f"^`{output}` has no planned result"):
+            api.check(top, outputs=[output])
 
 
 ROOTED = """\
@@ -358,18 +324,15 @@ universes:
 """`gap`, which nothing reads, takes nothing in `u1` and, through `inner`, nothing in `u3`."""
 
 
-def test_the_plan_notes_a_switch_nothing_reads_where_it_takes_nothing(tmp_path: Path) -> None:
-    """A switch the plan plans from, which nothing reads (Results *plans*), gets a
+def test_a_switch_nothing_reads_is_noted_where_it_takes_nothing(tmp_path: Path) -> None:
+    """A switch the root plans from, which nothing reads (Results *plans*), gets a
     `not_built` note where it takes nothing, as an output does: `gap` has no case for `a` in
     `u1`, and in `u3` takes `inner`, which has no case for `y`. `inner`, which `gap`'s case
     reads, is left to `gap`'s note."""
-    plan = api.plan(repository(tmp_path, {"astra.yaml": ROOTED}))
-    assert results(plan) == {(".", "base")}
-    notes = [n for n in plan.notes if n.kind == "not_built"]
-    found = [
-        (n.location and n.location.pointer, [u.id for u in n.universes], n.switch, n.option)
-        for n in notes
-    ]
+    resolved = api.resolve(repository(tmp_path, {"astra.yaml": ROOTED}))
+    assert results(resolved) == {(".", "base")}
+    notes = [n for n in resolved.notes if n.kind == "not_built"]
+    found = [(n.location.pointer, [u.id for u in n.universes], n.switch, n.option) for n in notes]
     assert found == [
         ("/outputs/gap", ["u1"], Element(ROOT, "switch", "gap"), "a"),
         ("/outputs/gap", ["u3"], Element(ROOT, "switch", "inner"), "y"),
@@ -388,12 +351,12 @@ def test_the_view_says_what_a_universe_uses_and_what_is_built_there(running: Pat
     """Results *uses* and *built*: `u2` selects `a` for `decision3`, inherited, but doesn't use
     it, as `output6` isn't built there: `switch1` takes nothing. In `u1`, it takes
     `stage.output3`."""
-    two = api.view("u2", running).analyses[0]
+    two = api.resolve(running).view("u2").analyses[0]
     assert (two.decisions["decision3"].used, two.decisions["decision3"].selected) == (False, "a")
     assert (two.decisions["decision1"].used, two.decisions["decision1"].selected) == (True, "a")
     assert (two.outputs["output6"].built, two.outputs["output6"].result) == (False, None)
     assert (two.outputs["switch1"].built, two.outputs["switch1"].takes) == (False, None)
-    one = api.view("u1", running).analyses[0]
+    one = api.resolve(running).view("u1").analyses[0]
     assert (one.outputs["switch1"].built, one.outputs["switch1"].takes) == (True, "stage.output3")
     assert one.outputs["output6"].built is True
     assert one.decisions["decision3"].used is True
@@ -404,7 +367,7 @@ def test_the_view_as_astra_universe_view_1_says_what_is_used_built_and_taken(
 ) -> None:
     """A decision's `used` and `selected`; an output's `built`, `takes` (a
     switch's) and `result`."""
-    shape = api.view("u2", running).to_json()
+    shape = api.resolve(running).view("u2").to_json()
     for analysis in shape["analyses"]:
         assert all(set(d) == {"used", "selected"} for d in analysis["decisions"].values())
         assert all(set(o) == {"built", "takes", "result"} for o in analysis["outputs"].values())
@@ -412,7 +375,7 @@ def test_the_view_as_astra_universe_view_1_says_what_is_used_built_and_taken(
     assert root["decisions"]["decision3"] == {"used": False, "selected": "a"}
     assert root["outputs"]["output6"] == {"built": False, "takes": None, "result": None}
     assert root["outputs"]["switch1"] == {"built": False, "takes": None, "result": None}
-    one = api.view("u1", running).to_json()["analyses"][0]
+    one = api.resolve(running).view("u1").to_json()["analyses"][0]
     assert one["outputs"]["switch1"] == {"built": True, "takes": "stage.output3", "result": None}
 
 
@@ -495,6 +458,17 @@ def messages(report: CheckReport, address: str) -> list[str]:
     ]
 
 
+def changes(report: CheckReport, address: str) -> list[tuple[str | None, str | None]]:
+    """What each reason at `address` says changed, and the entry it is about."""
+    return [
+        (reason.change, reason.entry)
+        for checked in report.results
+        for status in checked.statuses
+        if status.place.address == address
+        for reason in status.reasons
+    ]
+
+
 @pytest.fixture(scope="module")
 def committed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """`CHECKED`, built from its commit with the same bytes for every result, its records and
@@ -528,6 +502,7 @@ def test_another_option_selected_for_a_switchs_decision_makes_its_reader_stale(
     report = api.check(checked)
     assert statuses(report) == {**UNCHANGED, "reader#u1": ("stale", "present")}
     assert any("switches on" in message for message in messages(report, "reader#u1"))
+    assert changes(report, "reader#u1") == [("switch", "sw")]
 
 
 def test_another_case_taken_makes_its_reader_stale(checked: Path) -> None:
@@ -543,6 +518,7 @@ def test_another_case_taken_makes_its_reader_stale(checked: Path) -> None:
         "reader#u2": ("unchanged", "present"),
     }
     assert any("case for" in message for message in messages(report, "reader#u1"))
+    assert ("switch", "sw") in changes(report, "reader#u1")
 
 
 def test_evidence_citing_a_switch_cites_the_case_it_takes_in_each_universe(

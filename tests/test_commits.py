@@ -328,6 +328,34 @@ def test_a_commit_kept_from_an_earlier_fetch_counts_as_got(tmp_path: Path) -> No
     assert runner.invoke(main, ["validate", str(root), "--offline"]).exit_code == 0
 
 
+def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path) -> None:
+    """`offline`, `resolve`, `check`, `bind` and `history` fetch nothing, as `validate`: a
+    remote's commit that was never got leaves the analysis invalid, and one kept from an earlier
+    fetch is read, though the remote is gone."""
+    remote = repository(tmp_path / "remote", {"astra.yaml": MINIMAL})
+    head = git(remote, "rev-parse", "HEAD").strip()
+    text = declaring(f"{{up: {{url: '{remote.as_uri()}', commit: '{head}'}}}}", "[up.result]")
+    root = repository(tmp_path / "root", {"astra.yaml": text})
+    with pytest.raises(api.InvalidAnalysisError):
+        api.resolve(root, offline=True)
+    with pytest.raises(api.InvalidAnalysisError):
+        api.history(root, offline=True)
+    assert [d.code for d in api.check(root, offline=True).errors] == ["REMOTE_UNREACHABLE"]
+    unreached = api.bind(root, offline=True).stack
+    assert unreached is not None and len(list(unreached.determined())) == 1
+    assert len(api.resolve(root).results) == 2  # fetched
+    remote.rename(tmp_path / "gone")
+    resolved = api.resolve(root, offline=True)
+    assert [(r.places[0].address, r.from_commit) for r in resolved.results] == [
+        ("result", True),
+        ("result", False),
+    ]
+    assert api.check(root, offline=True).errors == ()
+    reached = api.bind(root, offline=True).stack
+    assert reached is not None and len(list(reached.determined())) == 2
+    assert api.history(root, offline=True).timeline("result") == ()
+
+
 def test_a_commit_further_in_is_reported_on_the_outermost_declaration(tmp_path: Path) -> None:
     """The root declares `stage` by path, `stage` declares `upstream` by url, and `upstream`
     declares `nested` by url, whose commit can't be got: the error is on `stage`'s declaration

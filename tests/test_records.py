@@ -1,25 +1,23 @@
 """Records, read as UTF-8 JSON text and checked by the record schema their minor version picks;
-and `records`: reading one at a place, writing one, and making a result's records from its run."""
+and `records`: reading one at a place, writing one, and the record a runner makes of its run."""
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from astra import api
 from astra.contract import Contract
 from astra.diagnostics import Catalogue
 from astra.hashing import digest_bytes
 from astra.load import ParseError, load_json
-from astra.records import Record, RecordedInput, Runner, new_record, read_record, write_record
+from astra.records import Record, RecordedInput, Runner, read_record, timestamp, write_record
 from astra.sources.reader import WorktreeReader
-from tests.conftest import RUNNER, git, repository
+from tests.conftest import RUNNER
 from tests.spec import DOCUMENTS
-from tests.test_plan import INNER, PAIR, STAGE
 
 RECORD = json.loads((DOCUMENTS / "valid" / "ProvenanceRecord-001-full.json").read_text("utf-8"))
 """A valid record of 0.1, astra-spec's fixture."""
@@ -93,7 +91,7 @@ def test_a_record_that_is_json_is_read() -> None:
     }
 
 
-# --- reading, writing and making records ---
+# --- reading and writing records, and the record of a run ---
 
 
 def test_a_record_is_written_with_sorted_keys_two_spaces_and_a_final_line_break(
@@ -134,30 +132,28 @@ def test_a_later_minor_versions_fields_are_left_out_of_the_record(contract: Cont
     assert Record.from_json(later).to_json() == {**RECORD, "spec_version": "0.2.0"}
 
 
-def test_new_record_fills_in_each_names_record(tmp_path: Path, contract: Contract) -> None:
-    """The hash and size of the bytes made, at the first name's default place, and of what each
-    entry read, the commit, environment, runner and times; and each name's record has the
-    result's address at that name."""
-    files = {"astra.yaml": PAIR, "stage/astra.yaml": STAGE, "stage/inner/astra.yaml": INNER}
-    top = repository(tmp_path, files)
-    commit = git(top, "rev-parse", "HEAD").strip()
-    by_address = {r.places[0].address: r for r in api.plan(top).results}
-    inner = by_address["inner.output1#u1"]
-    (top / inner.places[0].bytes).parent.mkdir(parents=True)
-    (top / inner.places[0].bytes).write_bytes(b"{}\n")
-    started = datetime(2026, 10, 26, 14, 0, 0, 123456, tzinfo=UTC)
-    records = new_record(
-        inner,
-        checkout=top,
-        commit=commit,
-        environment="urn:example:env",
-        runner=Runner("example-runner", "1.2.0"),
-        started=started,
-        finished=started + timedelta(seconds=2),
-    )
+def test_a_record_of_a_run_holds_what_the_runner_gives_it(
+    tmp_path: Path, contract: Contract
+) -> None:
+    """A runner makes a record of what its run made and read, at each place of the result it
+    built, with that place's address: the hash and size of the bytes made, and of what each
+    entry read, the commit, environment, runner and times. `inputs`, `started` and `finished`
+    are left out of its JSON where it has none, and it reads back as it was written."""
+    commit = "a" * 40
     made = digest_bytes(b"{}\n")
-    assert [record.address for record in records] == ["inner.output1#u1", "stage.inner.output1#u1"]
-    assert records[1].to_json() == {
+    started = datetime(2026, 10, 26, 14, 0, 0, 123456, tzinfo=UTC)
+    record = Record(
+        "stage.inner.output1#u1",
+        made.content_hash,
+        made.size,
+        commit,
+        "urn:example:env",
+        Runner("example-runner", "1.2.0"),
+        started=timestamp(started),
+        finished=timestamp(started + timedelta(seconds=2)),
+    )
+    assert record.digest == made
+    assert record.to_json() == {
         "spec_version": "0.1.0",
         "address": "stage.inner.output1#u1",
         "content_hash": made.content_hash,
@@ -170,12 +166,23 @@ def test_new_record_fills_in_each_names_record(tmp_path: Path, contract: Contrac
             "finished": "2026-10-26T14:00:02.123Z",
         },
     }
-    through = by_address["through_inner#u1"]
-    (top / through.places[0].bytes).write_bytes(b"[]\n")
-    (record,) = new_record(
-        through, checkout=top, commit=commit, environment="urn:example:env", runner=RUNNER
+    read = (RecordedInput("inner.output1", made.content_hash, 3),)
+    reading = Record(
+        "through_inner#u1", made.content_hash, 3, commit, "urn:example:env", RUNNER, read
     )
-    assert record.inputs == (RecordedInput("inner.output1", made.content_hash, 3),)
-    write_record(top / through.places[0].record, record)
-    reader = WorktreeReader(top, None)
-    assert read_record(reader, through.places[0].record, contract) == record
+    assert reading.inputs[0].digest == made
+    assert reading.to_json()["generated_by"] == {
+        "commit": commit,
+        "environment": {"iri": "urn:example:env"},
+        "runner": {"id": RUNNER.id, "version": RUNNER.version},
+        "inputs": [{"entry": "inner.output1", "content_hash": made.content_hash, "size": 3}],
+    }
+    path = ".astra/records/u1/through_inner.json"
+    write_record(tmp_path / path, reading)
+    assert read_record(WorktreeReader(tmp_path, None), path, contract) == reading
+
+
+def test_a_time_is_given_in_utc_to_the_millisecond() -> None:
+    """`timestamp` gives a moment as a record gives a time, whatever its zone."""
+    moment = datetime(2026, 10, 26, 16, 0, 0, 999999, tzinfo=timezone(timedelta(hours=2)))
+    assert timestamp(moment) == "2026-10-26T14:00:00.999Z"

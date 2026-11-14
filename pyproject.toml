@@ -1,7 +1,7 @@
 [project]
 name = "astra-tools"
 dynamic = ["version"]
-description = "Validator, checker and a runner's building blocks for ASTRA v0.1 analyses."
+description = "Validator, resolver and checker for ASTRA v0.1 analyses, with the record format a runner writes."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
