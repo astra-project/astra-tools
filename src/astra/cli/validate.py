@@ -59,7 +59,7 @@ def command(
     A quote that isn't verified is an error of the report, as a broken rule is, at its place
     in astra.yaml: EVIDENCE_PAPER_MISSING where its paper isn't in the cache,
     EVIDENCE_PAPER_UNREADABLE where the paper can't be read, and EVIDENCE_QUOTE_NOT_FOUND
-    where the quote isn't in the paper.
+    where the quote isn't in the paper, or isn't on the page its location gives (`page=6`).
 
     With --json, the reports are printed as JSON, `astra-validation-reports/1`: whether every
     analysis is valid, and each analysis's report (`astra-validation-report/1`), one for FILE
@@ -167,15 +167,12 @@ def _suggest(insights: dict[str, dict[str, model.Insight]]) -> None:
 
 def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
     """Insights as the verification reads them: each evidence with its place in the insight as
-    its id, and its location's page, `page=N`, as the page to seek the quote on first."""
+    its id, and the page its location gives, which the quote is sought on."""
     shaped: dict[str, dict[str, Any]] = {}
     for insight_id, insight in insights.items():
         items = []
         for index, item in enumerate(insight.evidence):
-            page = None
-            if item.location is not None and item.location.value.startswith("page="):
-                number = item.location.value.removeprefix("page=")
-                page = int(number) if number.isdigit() else None
+            page = _page(item.location)
             quote = item.quote
             items.append(
                 {
@@ -193,12 +190,30 @@ def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
     return shaped
 
 
+PDF = (None, "http://tools.ietf.org/rfc/rfc3778")
+"""The `conforms_to` of a PDF fragment identifier: none, or the IRI Web Annotation gives it."""
+
+
+def _page(location: model.FragmentSelector | None) -> int | None:
+    """The page, counted from 1, that the first `page=` of a PDF fragment identifier gives, its
+    parameters joined with `&`; None where the location gives none or follows another syntax,
+    and the quote is then sought in the whole text."""
+    if location is None or location.conforms_to not in PDF:
+        return None
+    for parameter in location.value.split("&"):
+        name, _, value = parameter.partition("=")
+        if name == "page" and value.isascii() and value.isdigit():
+            return int(value)
+    return None
+
+
 def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
     """Verify the quotes of the root's evidence against the cached papers. Gives an error for
     each that isn't verified, at its place in the root's file, as a validation error is given:
     `EVIDENCE_PAPER_MISSING` at the `doi` of one whose paper isn't in the cache,
     `EVIDENCE_PAPER_UNREADABLE` where the paper's text can't be read, and
-    `EVIDENCE_QUOTE_NOT_FOUND` at a `quote` that isn't in its paper. And gives the lines that
+    `EVIDENCE_QUOTE_NOT_FOUND` at a `quote` that isn't in its paper, or isn't on the page its
+    `location` gives. And gives the lines that
     sum up what was verified and skipped."""
     from astra.diagnostics import Diagnostic
     from astra.papers.cache import PaperCache
@@ -227,10 +242,14 @@ def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
                 add += "" if item.version is None else f" --version {item.version}"
                 if item.status == VerificationStatus.NOT_FOUND:
                     code, field = "EVIDENCE_QUOTE_NOT_FOUND", "quote"
-                    message = (
-                        f"the quote isn't found in the paper of {named}: copy it exactly from "
-                        "the paper, and check the DOI and version"
-                    )
+                    if "where its location places it" in item.message:
+                        detail = item.message.removeprefix("Quote not found ")
+                        message = f"the quote isn't found in the paper of {named} {detail}"
+                    else:
+                        message = (
+                            f"the quote isn't found in the paper of {named}: copy it exactly "
+                            "from the paper, and check the DOI and version"
+                        )
                 elif "not in cache" in item.message:
                     code, field = "EVIDENCE_PAPER_MISSING", "doi"
                     message = (

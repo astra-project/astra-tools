@@ -17,17 +17,22 @@ DOI = "10.9999/example"
 TEXT = "Robust estimators reduce the influence of outliers on fitted relations."
 
 
-def pdf(text: str) -> bytes:
-    """A one-page PDF whose text is `text`."""
-    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+def pdf(*texts: str) -> bytes:
+    """A PDF with one page for each of `texts`, whose text it is."""
+    count = len(texts)
+    kids = b" ".join(b"%d 0 R" % (4 + 2 * n) for n in range(count))
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
-        b"/Resources << /Font << /F1 5 0 R >> >> >>",
-        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+        b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, count),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
+    for n, text in enumerate(texts):
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+            b"/Resources << /Font << /F1 3 0 R >> >> >>" % (5 + 2 * n)
+        )
+        objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
     data = b"%PDF-1.4\n"
     offsets = []
     for number, body in enumerate(objects, start=1):
@@ -178,3 +183,36 @@ def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
     assert (diagnostic["code"], diagnostic["level"]) == ("EVIDENCE_QUOTE_NOT_FOUND", "error")
     assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/quote"
     assert "evidence" not in report
+
+
+def test_a_wrong_quote_fails_every_time_it_is_verified(home: Path) -> None:
+    """A failure isn't taken from the verification cache as a success."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf(TEXT))
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
+    text = MINIMAL + INSIGHT.format(quote="a sentence the paper never says")
+    folder = analysis(git_init(home / "repo"), text)
+    assert [astra("validate", str(folder), "-e").exit_code for _ in range(3)] == [1, 1, 1]
+
+
+def test_a_quote_is_sought_on_the_page_its_location_gives(home: Path) -> None:
+    """With `location: {value: page=N}`, the quote is on page N or isn't found; with no
+    location, it is found on any page."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf("An unrelated first page of introduction.", TEXT))
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
+    text = MINIMAL + INSIGHT.format(quote="influence of outliers")
+    folder = analysis(git_init(home / "repo"), text)
+    assert astra("validate", str(folder), "-e").exit_code == 0
+    analysis(folder, text + "        location: {value: page=2}\n")
+    assert astra("validate", str(folder), "-e").exit_code == 0
+    analysis(folder, text + "        location: {value: page=1}\n")
+    wrong = astra("validate", str(folder), "-e")
+    assert wrong.exit_code == 1
+    assert "EVIDENCE_QUOTE_NOT_FOUND" in wrong.stdout
+    assert "on page 1, where its location places it (it is on page 2)" in wrong.stdout
+    analysis(folder, text + "        location: {value: page=9}\n")
+    beyond = astra("validate", str(folder), "-e")
+    assert beyond.exit_code == 1 and "the PDF has 2 page(s)" in beyond.stdout
+    analysis(folder, text + "        location: {value: page=2}\n")
+    assert astra("validate", str(folder), "-e").exit_code == 0  # not the cached failure
