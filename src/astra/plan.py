@@ -728,8 +728,7 @@ def render_command(
     An entry that reads at a commit (`Read.commit`) names no file in the checkout: its path is
     in the tree of that commit, and the runner gets the bytes. `got` gives, by entry,
     where it put them: a path from the checkout's top, or an absolute one. An entry it doesn't
-    give is written `<commit>:<path>`, git's name for the file at that commit, as `astra plan`
-    shows it."""
+    give is written `<commit>:<path>`, git's name for the file at that commit."""
     depth = len(result.workdir.split("/")) if result.workdir else 0
     top = os.path.join(cwd, *[os.pardir] * depth)  # one checkout for every path
     got = got or {}

@@ -47,8 +47,9 @@ astra.yaml: valid, 0 error(s), 0 warning(s)
 ```
 
 `astra init` writes an empty `astra.yaml`, with a `spec_version` and a label, in a git
-repository; run again, it changes nothing. Once the analysis has outputs, `astra plan` shows
-where each result's record and bytes go, and the command that builds it.
+repository; run again, it changes nothing. Once the analysis has outputs and universes,
+`astra view UNIVERSE` shows where each result goes in a universe, and `astra check` whether each
+is built and current.
 [Getting started](https://astra-spec.org/0.1/getting-started/) goes further.
 
 ## Commands
@@ -58,7 +59,6 @@ where each result's record and bytes go, and the command that builds it.
 | [`astra init`](https://astra-spec.org/0.1.0rc1/cli/#astra-init) | Make a minimal analysis, or complete one (idempotent) |
 | [`astra validate`](https://astra-spec.org/0.1.0rc1/cli/#astra-validate) | Validate an analysis and its whole stack, or every analysis under the current folder |
 | [`astra info`](https://astra-spec.org/0.1.0rc1/cli/#astra-info) | Show an analysis in brief |
-| [`astra plan`](https://astra-spec.org/0.1.0rc1/cli/#astra-plan) | Show the planned results, their places and commands |
 | [`astra view`](https://astra-spec.org/0.1.0rc1/cli/#astra-view) | Show the analysis as it is in one universe |
 | [`astra check`](https://astra-spec.org/0.1.0rc1/cli/#astra-check) | Check the records and bytes of the planned results |
 | [`astra history`](https://astra-spec.org/0.1.0rc1/cli/#astra-history) | Show what git holds of a result's records over time |

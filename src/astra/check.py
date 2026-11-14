@@ -215,7 +215,7 @@ def check(
             where = "" if narrowed is None else " in the universes asked for"
             raise RequestError(
                 f"`{address}` has no planned result{where}: a check covers only the planned "
-                "results, which `astra plan` lists"
+                "results, which `astra check` lists"
             )
     catalogue = Catalogue.load()
     checker = _Checker(stack, catalogue, Contract.load(catalogue), remotes or Remotes())
