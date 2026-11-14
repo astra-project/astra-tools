@@ -182,8 +182,7 @@ def test_cli_validate_reports_findings_artifact_skipped(tmp_path: Path, patch_ex
     runner = CliRunner()
     result = runner.invoke(main, ["validate", str(folder / "astra.yaml"), "--verify-evidence"])
     assert result.exit_code == 0, result.output
-    assert "Verifying evidence" in result.output
-    assert "✓ Evidence (findings): 0/1 verified, 1 SKIPPED (artifact)" in result.output
+    assert "Evidence (findings): 0/1 verified, 1 SKIPPED (artifact)" in result.output
 
     hinted = runner.invoke(main, ["validate", str(folder)])
     assert "Run with --verify-evidence to verify quotes exist in papers." in hinted.output
@@ -193,7 +192,4 @@ def test_cli_validate_reports_findings_artifact_skipped(tmp_path: Path, patch_ex
     )
 
     as_json = runner.invoke(main, ["validate", str(folder), "-e", "--json"])
-    evidence = json.loads(as_json.output)["reports"][0]["evidence"]
-    assert [(item["in"], item["insight"], item["status"]) for item in evidence] == [
-        ("findings", "best", "skipped")
-    ]
+    assert json.loads(as_json.output)["reports"][0]["diagnostics"] == []

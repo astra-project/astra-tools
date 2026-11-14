@@ -354,7 +354,9 @@ def extract_text_from_pdf(pdf_path: Path) -> PDFDocument:
 
     # Check for cached extracted text (stored in user's cache dir to avoid
     # permission issues when papers are in another user's directory)
-    text_cache_dir = Path.home() / ".cache" / "astra" / "text_cache"
+    from astra import cache
+
+    text_cache_dir = cache.root() / "text_cache"
     cache_path = text_cache_dir / f"{sha256}.json"
     if cache_path.exists():
         try:

@@ -3,7 +3,7 @@
 Papers are cached by DOI with optional version for arXiv papers.
 
 Cache structure:
-    ~/.cache/astra/papers/
+    <astra cache>/papers/   (`$ASTRA_CACHE_DIR`, or `~/.cache/astra` on Linux)
     ├── 10.48550_arXiv.1706.03762_v7/
     │   ├── paper.pdf
     │   └── meta.json
@@ -110,10 +110,13 @@ class PaperCache:
         """Initialize the paper cache.
 
         Args:
-            cache_dir: Directory for paper cache. Defaults to ~/.cache/astra/papers.
+            cache_dir: Directory for paper cache. Defaults to `papers` in the astra cache
+                (`astra.cache.root`): `$ASTRA_CACHE_DIR`, or `~/.cache/astra` on Linux.
         """
         if cache_dir is None:
-            cache_dir = Path.home() / ".cache" / "astra" / "papers"
+            from astra import cache
+
+            cache_dir = cache.root() / "papers"
         self.cache_dir = cache_dir
 
     def _paper_dir(self, doi: str, version: int | None = None) -> Path:

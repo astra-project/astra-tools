@@ -105,6 +105,28 @@ def test_info_shows_the_analysis_in_brief(tmp_path: Path) -> None:
     assert "u2: derived from u1" in shown
 
 
+def test_info_shows_each_other_analysis_of_the_stack_after_the_root(tmp_path: Path) -> None:
+    """Each analysis the root declares, directly or not, by the address that reaches it and
+    its file, one at a commit with the commit; one that isn't a valid document says so."""
+    files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
+    top = repository(tmp_path, files)
+    first = git(top, "rev-parse", "HEAD").strip()
+    declared = f"  previous: {{path: ., commit: '{first}'}}\ninputs:\n"
+    repository(top, {"astra.yaml": ROOT.replace("inputs:\n", declared, 1)})
+    result = astra("info", "-f", str(top / "astra.yaml"), "-o")
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert "Analysis: subanalysis  subanalysis/astra.yaml" in lines
+    assert f"Analysis: previous  astra.yaml at {first}" in lines
+    assert result.stdout.count("\nOutputs:\n") == 3 and "\nDecisions:\n" not in result.stdout
+    assert lines.index("Example analysis") < lines.index(
+        "Analysis: subanalysis  subanalysis/astra.yaml"
+    )
+    (top / "subanalysis" / "astra.yaml").write_text(SUBANALYSIS + "name: x\n")
+    broken = astra("info", "-f", str(top / "astra.yaml")).stdout
+    assert "not a valid document: `astra validate` says why" in broken
+
+
 def test_info_with_no_stack_to_show_exits_1(tmp_path: Path, outside: Path) -> None:
     """A root whose file isn't a valid document, or in no repository, has no stack."""
     for folder in (analysis(git_init(tmp_path / "repo"), MINIMAL + "name: x\n"), analysis(outside)):

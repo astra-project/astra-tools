@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
+from astra import cache
 from astra.cli import main
+from tests.conftest import MINIMAL, analysis, git_init
 
 DOI = "10.9999/example"
 TEXT = "Robust estimators reduce the influence of outliers on fitted relations."
@@ -42,9 +44,8 @@ def pdf(text: str) -> bytes:
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A home of its own, so the paper cache is empty."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def home(tmp_path: Path) -> Path:
+    """A folder for the test's files; its paper cache is the test's own cache, empty."""
     return tmp_path
 
 
@@ -114,3 +115,66 @@ def test_verify_quotes_paper_not_cached(home: Path) -> None:
     output = json.loads(result.stdout)
     assert (output["doi"], output["version"]) == ("10.9999/test", 1)
     assert "not in cache" in output["error"] and "summary" in output
+
+
+def test_the_papers_are_kept_in_the_astra_cache(home: Path) -> None:
+    """Under `ASTRA_CACHE_DIR`, with what else astra-tools keeps, not in the home folder."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf(TEXT))
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
+    kept = Path(astra("paper", "path", DOI).stdout.strip())
+    assert kept.is_relative_to(cache.root() / "papers")
+    quotes = json.dumps({"quotes": [{"text": "influence of outliers"}]})
+    assert astra("paper", "verify-quotes", DOI, stdin=quotes).exit_code == 0
+    assert (cache.root() / "text_cache").is_dir()
+
+
+def test_only_an_arxiv_paper_is_downloaded(home: Path) -> None:
+    """Any other paper is added from a PDF the user has: nothing is asked of another service."""
+    result = astra("paper", "add", DOI)
+    assert result.exit_code == 1
+    assert "Only arXiv papers" in result.stdout and "--pdf" in result.stdout
+
+
+INSIGHT = """\
+prior_insights:
+  robust:
+    claim: Robust estimators help.
+    evidence:
+      - doi: "10.9999/example"
+        quote:
+          exact: "{quote}"
+"""
+
+
+def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
+    """A quote that isn't verified is an error of the report, with its code and place: its
+    paper not in the cache, then the quote not in the paper."""
+    folder = analysis(
+        git_init(home / "repo"), MINIMAL + INSIGHT.format(quote="influence of outliers")
+    )
+    missing = astra("validate", str(folder), "-e")
+    assert missing.exit_code == 1
+    lines = missing.stdout.splitlines()
+    assert lines[0] == "astra.yaml"
+    assert lines[1].startswith("  12:14 error EVIDENCE_PAPER_MISSING the paper of 10.9999/example")
+    assert "run `astra paper add 10.9999/example`" in lines[1]
+    assert "astra.yaml: invalid, 1 error(s), 0 warning(s)" in missing.stdout
+    assert "Evidence (prior_insights): 0/1 verified, 1 failed" in missing.stdout
+    assert astra("validate", str(folder)).exit_code == 0  # without -e, nothing is verified
+
+    source = home / "paper.pdf"
+    source.write_bytes(pdf(TEXT))
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
+    found = astra("validate", str(folder), "-e")
+    assert found.exit_code == 0
+    assert "Evidence (prior_insights): 1/1 verified" in found.stdout
+
+    folder = analysis(folder, MINIMAL + INSIGHT.format(quote="a sentence the paper never says"))
+    result = astra("validate", str(folder), "-e", "--json")
+    assert result.exit_code == 1
+    (report,) = json.loads(result.stdout)["reports"]
+    (diagnostic,) = report["diagnostics"]
+    assert (diagnostic["code"], diagnostic["level"]) == ("EVIDENCE_QUOTE_NOT_FOUND", "error")
+    assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/quote"
+    assert "evidence" not in report

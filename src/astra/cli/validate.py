@@ -4,6 +4,7 @@ validator's report, for one analysis or every root analysis under the current fo
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,7 @@ from astra.cli import FAILED, environment, write_json
 
 if TYPE_CHECKING:
     from astra import model
+    from astra.diagnostics import Diagnostic
     from astra.stack import Stack
 
 SKIPPED = frozenset({"node_modules", "venv", "__pycache__", "results"})
@@ -54,11 +56,15 @@ def command(
     findings actually exist in the source papers. Papers must be cached first using 'astra
     paper add'. Artifact-backed evidence is reported as SKIPPED.
 
+    A quote that isn't verified is an error of the report, as a broken rule is, at its place
+    in astra.yaml: EVIDENCE_PAPER_MISSING where its paper isn't in the cache,
+    EVIDENCE_PAPER_UNREADABLE where the paper can't be read, and EVIDENCE_QUOTE_NOT_FOUND
+    where the quote isn't in the paper.
+
     With --json, the reports are printed as JSON, `astra-validation-reports/1`: whether every
     analysis is valid, and each analysis's report (`astra-validation-report/1`), one for FILE
-    or one for each root analysis. With --verify-evidence, a report has an `evidence` member
-    too. The exit code is unchanged: 0 when every analysis is valid, 1 when one breaks a MUST
-    or a quote isn't verified, and 2 when one can't be validated.
+    or one for each root analysis. The exit code is unchanged: 0 when every analysis is valid,
+    1 when one breaks a MUST or a quote isn't verified, and 2 when one can't be validated.
     """
     options = (verify_evidence and not skip_evidence, skip_evidence, as_json, offline)
     if file is not None:
@@ -110,37 +116,34 @@ def _folder(file: Path) -> Path:
 def _validate_one(
     folder: Path, verify_evidence: bool, skip_evidence: bool, as_json: bool, offline: bool
 ) -> tuple[bool, dict[str, Any]]:
-    """Validate the analysis in `folder`, and print its report unless `as_json`. Gives whether
-    it is valid and, with `verify_evidence`, its every quote verified; and the report as JSON."""
+    """Validate the analysis in `folder`, and print its report unless `as_json`. With
+    `verify_evidence`, the report holds the evidence's diagnostics too. Gives whether it is
+    valid, and the report as JSON."""
     from astra import api
 
     with environment():
         report = api.validate(folder, offline=offline)
-    document = report.to_json()
+    stack = None
+    if report.valid and not skip_evidence:
+        with environment():
+            stack = api.bind(folder).stack
+    summary: list[str] = []
+    if stack is not None and verify_evidence:
+        found, summary = _verify(stack)
+        report = replace(report, diagnostics=(*report.diagnostics, *found))
     if not as_json:
         from astra.cli.text.validate import show
 
         show(report)
-    if not report.valid or skip_evidence:
-        return report.valid, document
-    insights = _insights(folder)
-    if not verify_evidence:
-        if not as_json:
-            _suggest(insights)
-        return True, document
-    results, verified = _verify(insights, as_json)
-    document["evidence"] = results
-    return verified, document
+        for line in summary:
+            click.echo(line)
+        if stack is not None and not verify_evidence:
+            _suggest(_insights(stack))
+    return report.valid, report.to_json()
 
 
-def _insights(folder: Path) -> dict[str, dict[str, model.Insight]]:
-    """The prior insights and findings of the analysis in `folder`, valid."""
-    from astra import api
-
-    with environment():
-        stack = api.bind(folder).stack
-    if stack is None:
-        return {}
+def _insights(stack: Stack) -> dict[str, dict[str, model.Insight]]:
+    """The prior insights and findings of the root of `stack`."""
     analysis = stack.analysis(stack.root)
     found = {"prior_insights": analysis.prior_insights, "findings": analysis.findings}
     return {label: dict(insights) for label, insights in found.items() if insights}
@@ -163,8 +166,8 @@ def _suggest(insights: dict[str, dict[str, model.Insight]]) -> None:
 
 
 def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
-    """Insights as the verification reads them: each evidence with an id, its place in the
-    insight, and its location's page, `page=N`, as the page to seek the quote on first."""
+    """Insights as the verification reads them: each evidence with its place in the insight as
+    its id, and its location's page, `page=N`, as the page to seek the quote on first."""
     shaped: dict[str, dict[str, Any]] = {}
     for insight_id, insight in insights.items():
         items = []
@@ -176,7 +179,7 @@ def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
             quote = item.quote
             items.append(
                 {
-                    "id": f"evidence[{index}]",
+                    "id": str(index),
                     "doi": item.doi or "",
                     "version": item.version,
                     "artifact": item.artifact,
@@ -190,66 +193,68 @@ def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
     return shaped
 
 
-def _verify(
-    insights: dict[str, dict[str, model.Insight]], as_json: bool
-) -> tuple[list[dict[str, Any]], bool]:
-    """Verify the quotes of `insights` against the cached papers, and print the outcome unless
-    `as_json`. Gives each evidence's result, and whether none failed."""
+def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
+    """Verify the quotes of the root's evidence against the cached papers. Gives an error for
+    each that isn't verified, at its place in the root's file, as a validation error is given:
+    `EVIDENCE_PAPER_MISSING` at the `doi` of one whose paper isn't in the cache,
+    `EVIDENCE_PAPER_UNREADABLE` where the paper's text can't be read, and
+    `EVIDENCE_QUOTE_NOT_FOUND` at a `quote` that isn't in its paper. And gives the lines that
+    sum up what was verified and skipped."""
+    from astra.diagnostics import Diagnostic
     from astra.papers.cache import PaperCache
     from astra.verification.cache import VerificationCache
     from astra.verification.core import VerificationStatus, verify_all_insights
 
     passed = (VerificationStatus.VERIFIED, VerificationStatus.CACHED)
-    results: list[dict[str, Any]] = []
-    failed = 0
-    if insights and not as_json:
-        click.echo("\nVerifying evidence...")
-    for label, found in insights.items():
-        verified = cached = skipped = artifacts = failures = 0
-        outcome = verify_all_insights(_evidence(found), PaperCache(), VerificationCache())
+    found: list[Diagnostic] = []
+    summary: list[str] = []
+    for label, insights in _insights(stack).items():
+        verified = cached = skipped = artifacts = failed = 0
+        outcome = verify_all_insights(_evidence(insights), PaperCache(), VerificationCache())
         for insight_id, result in outcome.items():
             for item in result.evidence_results:
-                results.append(
-                    {
-                        "in": label,
-                        "insight": insight_id,
-                        "evidence": item.evidence_id,
-                        "doi": item.doi or None,
-                        "version": item.version,
-                        "status": item.status.value,
-                        "pages": list(item.quote_found_pages),
-                        "message": item.message,
-                    }
-                )
                 if item.status in passed:
                     verified += 1
                     cached += item.status == VerificationStatus.CACHED
-                elif item.status == VerificationStatus.SKIPPED:
+                    continue
+                if item.status == VerificationStatus.SKIPPED:
                     skipped += 1
                     artifacts += "Artifact quote verification" in item.message
+                    continue
+                failed += 1
+                named = item.doi + ("" if item.version is None else f" version {item.version}")
+                add = f"astra paper add {item.doi}"
+                add += "" if item.version is None else f" --version {item.version}"
+                if item.status == VerificationStatus.NOT_FOUND:
+                    code, field = "EVIDENCE_QUOTE_NOT_FOUND", "quote"
+                    message = (
+                        f"the quote isn't found in the paper of {named}: copy it exactly from "
+                        "the paper, and check the DOI and version"
+                    )
+                elif "not in cache" in item.message:
+                    code, field = "EVIDENCE_PAPER_MISSING", "doi"
+                    message = (
+                        f"the paper of {named} isn't in the cache, so its quote isn't "
+                        f"verified: run `{add}`"
+                    )
                 else:
-                    failures += 1
-                    if not as_json:
-                        mark = "!" if item.status == VerificationStatus.ERROR else "✗"
-                        click.echo(f"  {mark} [{insight_id}] {item.evidence_id}: {item.message}")
-        failed += failures
-        if as_json:
-            continue
-        parts = [f"{verified}/{verified + skipped + failures} verified"]
+                    code, field = "EVIDENCE_PAPER_UNREADABLE", "doi"
+                    message = f"the paper of {named} in the cache can't be read: {item.message}"
+                pointer = (label, insight_id, "evidence", int(item.evidence_id), field)
+                at = stack.location(stack.root, pointer)
+                found.append(Diagnostic(code, "error", message, at))
+        parts = [f"{verified}/{verified + skipped + failed} verified"]
         if cached:
             parts.append(f"{cached} from cache")
         if artifacts:
             parts.append(f"{artifacts} SKIPPED (artifact)")
         if skipped - artifacts:
             parts.append(f"{skipped - artifacts} skipped")
-        click.echo(f"✓ Evidence ({label}): " + ", ".join(parts))
-    if failed and not as_json:
-        click.echo(f"\nError: {failed} evidence item(s) failed verification")
-        click.echo("\nTo fix:")
-        click.echo("  1. Check that quotes are exact copies from the paper")
-        click.echo("  2. Verify the DOI and version are correct")
-        click.echo("  3. Ensure the paper is cached: astra paper add <doi>")
-    return results, not failed
+        if failed:
+            parts.append(f"{failed} failed")
+        summary.append(f"Evidence ({label}): " + ", ".join(parts))
+    found.sort(key=lambda d: (d.location.line or 0, d.location.column or 0))
+    return found, summary
 
 
 def _roots(top: Path) -> list[Path]:
