@@ -225,97 +225,6 @@ def _download_arxiv_pdf(arxiv_id: str, doi: str, version: int | None = None) -> 
         )
 
 
-def _try_unpaywall(doi: str) -> PaperDownloadResult:
-    """Try to get open access PDF URL via Unpaywall.
-
-    Args:
-        doi: DOI of the paper.
-
-    Returns:
-        PaperDownloadResult with PDF content or error.
-    """
-    _require_httpx()
-
-    # Unpaywall requires an email for polite use
-    # Using a generic ASTRA email - users should configure their own
-    email = "astra-tool@example.org"
-    url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
-
-    try:
-        response = httpx.get(url, timeout=30.0)
-        if response.status_code == 404:
-            return PaperDownloadResult(
-                success=False,
-                error="DOI not found in Unpaywall",
-            )
-        response.raise_for_status()
-
-        data = response.json()
-
-        # Try to find best open access location
-        best_oa = data.get("best_oa_location")
-        if not best_oa:
-            return PaperDownloadResult(
-                success=False,
-                error="No open access version available",
-            )
-
-        pdf_url = best_oa.get("url_for_pdf")
-        if not pdf_url:
-            # Try the regular URL
-            pdf_url = best_oa.get("url")
-
-        if not pdf_url:
-            return PaperDownloadResult(
-                success=False,
-                error="No PDF URL available",
-            )
-
-        # Download the PDF
-        pdf_response = httpx.get(pdf_url, follow_redirects=True, timeout=60.0)
-        pdf_response.raise_for_status()
-
-        # Validate that we actually got a PDF and not an HTML redirect/paywall page
-        if not is_valid_pdf(pdf_response.content):
-            content_type = pdf_response.headers.get("content-type", "unknown")
-            return PaperDownloadResult(
-                success=False,
-                error=(
-                    f"Downloaded content is not a valid PDF (got content-type: {content_type}). "
-                    "The URL may have redirected to a paywall or CAPTCHA page."
-                ),
-            )
-
-        # Extract metadata
-        title = data.get("title")
-        authors = None
-        if data.get("z_authors"):
-            authors = [
-                f"{a.get('given', '')} {a.get('family', '')}".strip()
-                for a in data["z_authors"]
-                if a.get("family")
-            ]
-
-        return PaperDownloadResult(
-            success=True,
-            content=pdf_response.content,
-            url=pdf_url,
-            title=title,
-            authors=authors,
-        )
-
-    except httpx.HTTPStatusError as e:
-        return PaperDownloadResult(
-            success=False,
-            error=f"Unpaywall HTTP error: {e.response.status_code}",
-        )
-    except httpx.RequestError as e:
-        return PaperDownloadResult(
-            success=False,
-            error=f"Unpaywall request error: {e}",
-        )
-
-
 def resolve_doi(doi: str) -> str:
     """Resolve a DOI to its target URL.
 
@@ -336,7 +245,8 @@ def download_paper(doi: str, version: int | None = None) -> PaperDownloadResult:
     """Download a paper by DOI.
 
     For arXiv papers (DOI starting with 10.48550/arXiv.), downloads directly
-    from arXiv. For other papers, tries Unpaywall for open access versions.
+    from arXiv. No other paper is downloaded: its PDF is added from a local
+    file (``astra paper add <doi> --pdf <file>``).
 
     Metadata (title, authors) is fetched automatically via DOI content negotiation.
 
@@ -352,8 +262,13 @@ def download_paper(doi: str, version: int | None = None) -> PaperDownloadResult:
     if arxiv_id:
         return _download_arxiv_pdf(arxiv_id, doi, version)
 
-    # For non-arXiv papers, try Unpaywall
-    return _try_unpaywall(doi)
+    return PaperDownloadResult(
+        success=False,
+        error=(
+            f"Only arXiv papers (10.48550/arXiv.<id>) are downloaded, and {doi} isn't one. "
+            f"Download its PDF yourself, and add it with: astra paper add {doi} --pdf <file>"
+        ),
+    )
 
 
 def download_paper_to_cache(
@@ -367,7 +282,7 @@ def download_paper_to_cache(
 
     Args:
         doi: DOI of the paper.
-        cache_dir: Cache directory. Defaults to ~/.cache/astra/papers.
+        cache_dir: Cache directory. Defaults to `papers` in the astra cache.
         version: Paper version (for arXiv).
 
     Returns:

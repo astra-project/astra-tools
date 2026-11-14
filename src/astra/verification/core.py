@@ -221,7 +221,13 @@ def verify_evidence(
         # Check cache first
         if verification_cache:
             cached = verification_cache.get(doi, version, quote_text, pdf.sha256)
-            if cached:
+            # Only a quote verified where this evidence places it is taken from the cache: a
+            # failure is sought again, and so is a quote whose location names another page.
+            if (
+                cached
+                and cached.status == VerificationStatus.VERIFIED.value
+                and cached.expected_page == expected_page
+            ):
                 result.status = VerificationStatus.CACHED
                 result.quote_status = VerificationStatus(cached.status)
                 result.quote_found_pages = cached.found_pages or []
@@ -229,11 +235,29 @@ def verify_evidence(
                 result.from_cache = True
                 return result
 
-        # Verify quote (page is used as search hint only, not for validation)
-        # prefix/suffix from W3C TextQuoteSelector help disambiguate repeated quotes
+        # Verify quote. prefix/suffix from W3C TextQuoteSelector help disambiguate repeated
+        # quotes. Where the evidence's location gives a page, the quote is sought on that page:
+        # the search tries it first and stops at the first page found, so any other page means
+        # the quote isn't there.
         status, found_pages, message = verify_quote_in_pdf(
             quote_text, pdf, expected_page, quote_prefix, quote_suffix
         )
+        if (
+            status == VerificationStatus.VERIFIED
+            and expected_page is not None
+            and expected_page not in found_pages
+        ):
+            status = VerificationStatus.NOT_FOUND
+            if 1 <= expected_page <= pdf.num_pages:
+                message = (
+                    f"Quote not found on page {expected_page}, where its location places it "
+                    f"(it is on page {found_pages[0]})"
+                )
+            else:
+                message = (
+                    f"Quote not found on page {expected_page}, where its location places it: "
+                    f"the PDF has {pdf.num_pages} page(s)"
+                )
         result.quote_status = status
         result.status = status
         result.quote_found_pages = found_pages

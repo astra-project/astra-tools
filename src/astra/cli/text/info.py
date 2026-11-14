@@ -1,5 +1,6 @@
-"""An analysis in brief, as text: its label and description, its inputs, outputs, decisions
-(those of the analyses it declares after its own) and universes, or only the parts asked for."""
+"""An analysis in brief, as text: its label and description, then its inputs, outputs,
+decisions and universes, or only the parts asked for; and, after it, each other analysis of
+its stack, the same way."""
 
 from __future__ import annotations
 
@@ -9,14 +10,50 @@ from rich.table import Table
 from rich.tree import Tree
 
 from astra import model
-from astra.cli.text import console
-from astra.stack import Identity, Stack
+from astra.cli.text import console, file_named
+from astra.stack import Identity, Member, Stack
 
 
 def show(stack: Stack, only: set[str] | None = None) -> None:
-    """The root analysis of `stack`, with every part, or only the parts `only` names."""
+    """Each analysis of `stack`, the root first, with every part, or only the parts `only`
+    names."""
     out = console()
-    analysis = stack.analysis(stack.root)
+    names = _names(stack)
+    for member in stack.analyses.values():
+        root = member.identity == stack.root
+        if not root:
+            file = file_named(stack.location(member.identity, ()))
+            out.print()
+            out.print(
+                f"[bold magenta]Analysis: {escape(names[member.identity])}[/bold magenta]"
+                f"  [dim]{escape(file)}[/dim]"
+            )
+        if member.analysis is None:
+            out.print("  not a valid document: `astra validate` says why")
+            continue
+        _analysis(out, member, member.analysis, only, _layout(member) if root else "")
+
+
+def _names(stack: Stack) -> dict[Identity, str]:
+    """Each analysis of the stack but the root, with the address it is first reached by from
+    the root: the ids of the declarations that lead to it, joined by `.`."""
+    names: dict[Identity, str] = {}
+    reached = [(stack.root, "")]
+    while reached:
+        owner, prefix = reached.pop(0)
+        for id_, declaration in stack.analyses[owner].declarations.items():
+            target = declaration.reached
+            if target is None or target == stack.root or target in names:
+                continue
+            names[target] = f"{prefix}{id_}"
+            reached.append((target, f"{prefix}{id_}."))
+    return names
+
+
+def _analysis(
+    out: Console, member: Member, analysis: model.Analysis, only: set[str] | None, layout: str
+) -> None:
+    """One analysis: its label, description and counts, then its parts."""
     out.print(f"[bold]{escape(analysis.label or 'Unknown')}[/bold]")
     out.print(f"Spec version: {escape(analysis.spec_version)}")
     if analysis.description and analysis.description.strip():
@@ -26,7 +63,6 @@ def show(stack: Stack, only: set[str] | None = None) -> None:
         f"\n[dim]Inputs: {len(analysis.inputs)} | Outputs: {len(analysis.outputs)} | "
         f"Decisions: {len(analysis.decisions)} | Universes: {len(analysis.universes)}[/dim]"
     )
-    layout = _layout(stack)
     if layout:
         out.print(f"[dim]Layout: {escape(layout)}[/dim]")
 
@@ -52,16 +88,15 @@ def show(stack: Stack, only: set[str] | None = None) -> None:
     if asked("decisions"):
         out.print("\n[bold]Decisions:[/bold]")
         _decisions(out, analysis)
-        _declared(out, stack, stack.root, {stack.root}, 0)
     if only is None and analysis.universes:
         out.print("\n[bold]Universes:[/bold]")
         for id_, universe in analysis.universes.items():
             out.print(f"  [cyan]{id_}[/cyan]{escape(_universe(universe))}")
 
 
-def _layout(stack: Stack) -> str:
+def _layout(member: Member) -> str:
     """One line on the analyses the root declares, with the folders of those in its tree."""
-    declarations = stack.analyses[stack.root].declarations
+    declarations = member.declarations
     if not declarations:
         return ""
     folders = sorted(
@@ -94,10 +129,10 @@ def _universe(universe: model.Universe) -> str:
     return ""
 
 
-def _decisions(out: Console, analysis: model.Analysis, indent: str = "") -> None:
+def _decisions(out: Console, analysis: model.Analysis) -> None:
     """Each decision of `analysis`, as a tree of its rationale and options."""
     for id_, decision in analysis.decisions.items():
-        tree = Tree(f"{indent}[cyan]{id_}[/cyan]: {escape(decision.label or '')}")
+        tree = Tree(f"[cyan]{id_}[/cyan]: {escape(decision.label or '')}")
         if decision.tags:
             tree.add(f"[dim]Tags:[/dim] {escape(', '.join(decision.tags))}")
         if decision.rationale:
@@ -112,17 +147,3 @@ def _decisions(out: Console, analysis: model.Analysis, indent: str = "") -> None
             options.add(text)
         out.print(tree)
         out.print()
-
-
-def _declared(out: Console, stack: Stack, owner: Identity, seen: set[Identity], depth: int) -> None:
-    """The decisions of each analysis `owner` declares, and of those they declare, once each."""
-    for id_, declaration in stack.analyses[owner].declarations.items():
-        reached = declaration.reached
-        if reached is None or reached in seen:
-            continue
-        seen.add(reached)
-        out.print(f"\n  [bold magenta]{'  ' * depth}Analysis: {id_}[/bold magenta]")
-        analysis = stack.analyses[reached].analysis
-        if analysis is not None:
-            _decisions(out, analysis, "  " * (depth + 1))
-        _declared(out, stack, reached, seen, depth + 1)

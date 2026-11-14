@@ -31,11 +31,11 @@ SHAPE = "astra-info/1"
 def command(file: Path | None, decisions: bool, inputs: bool, outputs: bool, as_json: bool) -> None:
     """Show information about an analysis.
 
-    Its label and description, then its inputs, outputs, decisions (those of the analyses it
-    declares after its own) and universes; with -d, -i or -o, only those asked for. It checks
-    nothing: `astra validate` does. With --json, every analysis of the stack is printed as
-    JSON (`astra-info/1`), the root first. Exits 1 where there is no analysis, or no stack to
-    show.
+    Its label and description, then its inputs, outputs, decisions and universes; with -d, -i
+    or -o, only those asked for. Each other analysis of its stack follows, the same way: the
+    ones it declares, directly or not, in its working tree or at a commit. It checks nothing:
+    `astra validate` does. With --json, every analysis of the stack is printed as JSON
+    (`astra-info/1`), the root first. Exits 1 where there is no analysis, or no stack to show.
     """
     found = find_analysis() if file is None else file
     if found is None:

@@ -103,61 +103,6 @@ class TestPaperCacheAddValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestUnpaywallPdfValidation:
-    """Ensure _try_unpaywall rejects non-PDF download responses."""
-
-    def _make_response(self, content: bytes, content_type: str = "text/html") -> MagicMock:
-        resp = MagicMock()
-        resp.content = content
-        resp.headers = {"content-type": content_type}
-        resp.raise_for_status = MagicMock()
-        return resp
-
-    def _make_unpaywall_api_response(self, pdf_url: str) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {
-            "title": "Test Paper",
-            "best_oa_location": {"url_for_pdf": pdf_url},
-            "z_authors": [],
-        }
-        return resp
-
-    def test_unpaywall_rejects_html_response(self) -> None:
-        from astra.papers.download import _try_unpaywall
-
-        api_resp = self._make_unpaywall_api_response("https://example.com/paper.pdf")
-        pdf_resp = self._make_response(HTML_CONTENT, "text/html")
-
-        with patch("astra.papers.download.httpx") as mock_httpx:
-            mock_httpx.get.side_effect = [api_resp, pdf_resp]
-            mock_httpx.HTTPStatusError = Exception
-            mock_httpx.RequestError = Exception
-
-            result = _try_unpaywall("10.1234/fake")
-
-        assert result.success is False
-        assert "not a valid PDF" in result.error  # type: ignore[operator]
-        assert "paywall" in result.error.lower()  # type: ignore[operator]
-
-    def test_unpaywall_accepts_pdf_response(self) -> None:
-        from astra.papers.download import _try_unpaywall
-
-        api_resp = self._make_unpaywall_api_response("https://example.com/paper.pdf")
-        pdf_resp = self._make_response(PDF_MAGIC, "application/pdf")
-
-        with patch("astra.papers.download.httpx") as mock_httpx:
-            mock_httpx.get.side_effect = [api_resp, pdf_resp]
-            mock_httpx.HTTPStatusError = Exception
-            mock_httpx.RequestError = Exception
-
-            result = _try_unpaywall("10.1234/fake")
-
-        assert result.success is True
-        assert result.content == PDF_MAGIC
-
-
 class TestArxivPdfValidation:
     """Ensure _download_arxiv_pdf rejects non-PDF magic bytes even with correct content-type."""
 
