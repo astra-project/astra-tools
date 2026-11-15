@@ -15,7 +15,7 @@ import click
 from astra.cli import FAILED, environment, write_report
 
 if TYPE_CHECKING:
-    from astra.history import History
+    from astra._internal.results.history import History
 
 
 @click.group("history")
@@ -37,7 +37,7 @@ def _answering(hint: str) -> Iterator[None]:
     """Stop with exit 1 where the analysis breaks a MUST or what is asked for isn't in git, and
     with exit 2 where `hint`, the argument, names nothing or the analysis can't be read."""
     from astra import api
-    from astra.history import NotInHistoryError
+    from astra._internal.results.history import NotInHistoryError
 
     with environment():
         try:
@@ -53,9 +53,9 @@ def _answering(hint: str) -> Iterator[None]:
 
 def _history(path: Path | None) -> History:
     """The history of the records of the analysis in `path`, a valid one."""
-    from astra.history import History
-    from astra.resolve import read
-    from astra.sources.remote import Remotes
+    from astra._internal.analysis.resolve import read
+    from astra._internal.results.history import History
+    from astra._internal.sources.remote import Remotes
 
     remotes = Remotes()
     return History(read(path, remotes), remotes)
@@ -92,7 +92,7 @@ def lineage(address: str, path: Path | None, used_by: bool) -> None:
     gives them, and what that was made from, down to the input files. With --used-by, the
     planned results whose records at HEAD list it instead."""
     from astra.cli.text.history import show_lineage
-    from astra.records import ProvenanceRecord
+    from astra.model.provenance_record import ProvenanceRecord
 
     with _answering("ADDR"):
         found = _history(path).lineage(address, used_by=used_by)

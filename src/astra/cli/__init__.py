@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import click
 
 if TYPE_CHECKING:
-    from astra.stack import Stack
-    from astra.validate import ValidationReport
+    from astra._internal.analysis.stack import Stack
+    from astra.model.validation_report import ValidationReport
 
 COMMANDS = MappingProxyType(
     {
@@ -104,15 +104,15 @@ def read_stack(path: Path | None) -> Stack | None:
     """The stack whose root is the analysis in `path`, which needn't be valid; None where its
     root's file isn't a valid document or it is in no repository. Stops with exit 2 where it
     can't be read."""
-    from astra.sources.reader import worktree
-    from astra.stack import bind
+    from astra._internal.analysis.stack import bind
+    from astra._internal.sources.reader import worktree
 
     with environment():
         return bind(*worktree(path))[0]
 
 
 def write_report(report: ValidationReport, as_json: bool) -> None:
-    """Print a validation report as text or, `as_json`, as `astra-validation-report/1`."""
+    """Print a validation report as text or, `as_json`, as JSON."""
     if as_json:
         write_json(report.to_json())
     else:

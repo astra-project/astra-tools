@@ -33,7 +33,7 @@ def command() -> None:
 )
 def schema_export(output: Path) -> None:
     """Export LinkML schemas to files."""
-    from astra.scaffold import write_text
+    from astra._internal.documents.scaffold import write_text
 
     exported = []
     for schema_file in sorted(_directory().glob("*.yaml")):

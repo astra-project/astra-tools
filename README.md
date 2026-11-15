@@ -73,16 +73,23 @@ each command's options, exit codes and examples. The
 
 ## Python API
 
-`astra.api` is the whole public surface: three questions of an analysis, answered from its
-files and git alone in plain data that writes as JSON, and what a runner writes back.
+`astra.api` is the whole public surface, and the one module another package imports: three
+questions of an analysis, answered from its files and git alone in plain data that writes as
+JSON; what a tool writes; and the papers that evidence cites.
 
 ```python
 from astra import api
 
-api.validate(folder)           # is it valid: every rule it breaks, and where
+api.validate(folder)            # is it valid: every rule it breaks, and where
 analysis = api.resolve(folder)  # what it means, with every rule of the specification applied
 report = api.check(folder)      # do the records still hold: the analysis again, and each status
+
+api.create_boilerplate(folder)  # a new analysis, with nothing declared yet
 api.write_records(folder, result, content_hash, size, generated_by)
+
+api.paper(doi)                  # the paper of a DOI, in the paper cache
+api.add_paper(doi, pdf=file)    # put one there
+api.verify_quote(doi, quote)    # is the quote in it, and on which page
 ```
 
 A resolved analysis holds every analysis of the stack with what it declares, each universe's
@@ -96,6 +103,126 @@ check report gives it one status for each result: what the result itself breaks 
 which entries read a result that isn't unchanged (`stale_inputs`), so that it can tell, once it
 has rebuilt those, whether a result that only read them needs building too. What its run made it
 writes with `write_records`, a record at each of the result's places.
+
+The paper functions are apart from the rest: the paper cache is a folder of this machine,
+`add_paper` uses the network, and matching a quote against a PDF's text is astra-tools' own, as
+the specification has no rule on it.
+
+### The data model
+
+What the functions return is defined in
+[`src/astra/model/`](https://github.com/astra-project/astra-tools/tree/main/src/astra/model),
+a file for each, and those files hold nothing else:
+
+| File | Classes | Where they come from |
+|---|---|---|
+| `validation_report.py` | `ValidationReport` | `validate` returns it |
+| `resolved_analysis.py` | `ResolvedAnalysis`, and the classes it is made of: `Analysis`, `Input`, `Decision`, `Output`, `Insight`, `Universe`, `Result` and their parts | `resolve` returns it |
+| `check_report.py` | `CheckReport`, `Status`, `EvidenceStatus` | `check` returns it |
+| `provenance_record.py` | `ProvenanceRecord`, `Generation` and its parts | a runner gives `write_records` a `Generation`; a `Status` holds the record |
+| `diagnostic.py` | `Diagnostic`, `Location` | the reports hold them |
+| `paper.py` | `Paper`, `QuoteStatus` | the paper functions return them |
+
+Every class is a frozen dataclass that holds what JSON holds. Each writes as JSON by one rule:
+every field under its name, an optional one left out where it has no value, never null, and a
+list or a map always there. `astra validate --json`, `astra info --json` and
+`astra check --json` print the three reports exactly so.
+
+For this analysis, in a repository with nothing built yet:
+
+```yaml
+spec_version: "0.1.0"
+label: Example
+inputs:
+  catalog: {path: data/catalog.csv}
+decisions:
+  method:
+    options: {ols: {}, robust: {}}
+outputs:
+  fit:
+    type: metric
+    format: json
+    inputs: [catalog]
+    decisions: [method]
+    recipe:
+      command: python fit.py {inputs.catalog} {decisions.method} {output}
+universes:
+  baseline:
+    decisions: {method: ols}
+```
+
+`validate` gives:
+
+```json
+{"root": "astra.yaml", "valid": true, "diagnostics": [], "unchecked": []}
+```
+
+`resolve` gives:
+
+```json
+{
+  "spec_version": "0.1.0",
+  "analyses": [
+    {
+      "key": "", "folder": ".", "label": "Example", "tags": [], "declares": {},
+      "inputs": [{"ref": "inputs.catalog", "path": "data/catalog.csv", "tags": []}],
+      "decisions": [
+        {
+          "ref": "decisions.method",
+          "options": [
+            {"id": "ols", "tags": [], "insights": []},
+            {"id": "robust", "tags": [], "insights": []}
+          ],
+          "tags": []
+        }
+      ],
+      "outputs": [
+        {"ref": "outputs.fit", "type": "metric", "format": "json", "tags": [],
+         "decisions": ["decisions.method"]}
+      ],
+      "prior_insights": [], "findings": [],
+      "universes": [
+        {"ref": "universes.baseline", "selection": {"decisions.method": "ols"}, "tags": []}
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "fit#baseline", "output": "outputs.fit",
+      "places": [
+        {"address": "fit#baseline", "record_path": ".astra/records/baseline/fit.json",
+         "bytes_path": "results/baseline/fit.json"}
+      ],
+      "universe": "universes.baseline",
+      "inputs": [{"entry": "catalog", "input": "inputs.catalog"}],
+      "command": "python fit.py data/catalog.csv ols results/baseline/fit.json"
+    }
+  ],
+  "notes": []
+}
+```
+
+`check` gives that again as its `analysis`, and beside it:
+
+```json
+{
+  "statuses": {
+    "fit#baseline": {
+      "state": "missing", "bytes": "absent",
+      "why": [
+        {
+          "code": "MISSING_RECORD", "level": "error",
+          "message": "no record is at .astra/records/baseline/fit.json: build `fit#baseline`, and record it there",
+          "location": {"file": ".astra/records/baseline/fit.json", "pointer": ""},
+          "related": []
+        }
+      ],
+      "stale_inputs": []
+    }
+  },
+  "evidence": []
+}
+```
 
 ## Development
 

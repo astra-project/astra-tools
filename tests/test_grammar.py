@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from astra.grammar import (
+from astra._internal.documents.grammar import (
     Address,
     fill,
     parse_address,

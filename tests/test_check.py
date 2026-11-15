@@ -22,10 +22,11 @@ import pytest
 from click.testing import CliRunner, Result
 
 from astra import api
-from astra.check import CODES, CheckReport, Status
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.results.check import CODES
+from astra._internal.results.hashing import Digest, digest_bytes
 from astra.cli import main
-from astra.diagnostics import Catalogue
-from astra.hashing import Digest, digest_bytes
+from astra.model.check_report import CheckReport, Status
 from tests.conftest import (
     ENVIRONMENT,
     MINIMAL,
@@ -1056,9 +1057,10 @@ def test_astra_check_of_an_invalid_analysis_shows_why_and_exits_1(worked: Path) 
     assert "UNRESOLVED_ADDRESS" in result.stdout
     assert "planned result(s)" not in result.stdout
     assert result.stdout == astra("validate", str(worked)).stdout
-    shape = json.loads(astra("check", str(worked), "--json").stdout)
-    assert (shape["shape"], shape["valid"]) == ("astra-validation-report/1", False)
-    assert [d["code"] for d in shape["diagnostics"]] == ["UNRESOLVED_ADDRESS"]
+    report = json.loads(astra("check", str(worked), "--json").stdout)
+    assert report == api.validate(worked).to_json()
+    assert report["valid"] is False
+    assert [d["code"] for d in report["diagnostics"]] == ["UNRESOLVED_ADDRESS"]
 
 
 def test_astra_check_exits_2_where_it_cant_check(tmp_path: Path, worked: Path) -> None:

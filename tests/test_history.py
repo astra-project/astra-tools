@@ -1,5 +1,5 @@
 """History: `timeline`, `lineage`, `find` and `get` over the git history of the records of the
-root's planned results (`astra.history.History`), and `astra history`.
+root's planned results (`astra._internal.results.history.History`), and `astra history`.
 
 The repository is the worked example with a few commits of records, records and bytes both
 committed: built and committed (`first`); `data/input1.csv` changed, `output1` made again in
@@ -17,12 +17,12 @@ import pytest
 from click.testing import CliRunner, Result
 
 from astra import api
+from astra._internal.analysis.resolve import read
+from astra._internal.results.hashing import Digest, digest_bytes
+from astra._internal.results.history import History, NotInHistoryError, Version
+from astra._internal.sources.remote import Remotes
 from astra.cli import main
-from astra.hashing import Digest, digest_bytes
-from astra.history import History, NotInHistoryError, Version
-from astra.records import ProvenanceRecord, RecordedInput
-from astra.resolve import read
-from astra.sources.remote import Remotes
+from astra.model.provenance_record import ProvenanceRecord, RecordedInput
 from tests.conftest import ENVIRONMENT, MINIMAL, build, git, remake, repository
 from tests.test_resolve import LIB
 from tests.test_validate import WORKED_EXAMPLE

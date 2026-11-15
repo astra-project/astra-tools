@@ -16,7 +16,7 @@ def command(term: str | None, full: bool) -> None:
     No args prints a concept summary; TERM prints one entry (case-insensitive);
     --full concatenates every entry (VERY long).
     """
-    from astra import spec_render
+    from astra._internal.documents import spec_render
 
     if full and term:
         raise click.UsageError("--full dumps every entry; drop TERM or drop --full.")

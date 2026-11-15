@@ -9,9 +9,9 @@ from rich.markup import escape
 from rich.table import Table
 from rich.tree import Tree
 
-from astra import model
+from astra._internal.analysis.stack import Identity, Member, Stack
+from astra._internal.documents import document
 from astra.cli.text import console, file_named
-from astra.stack import Identity, Member, Stack
 
 
 def show(stack: Stack, only: set[str] | None = None) -> None:
@@ -51,7 +51,7 @@ def _names(stack: Stack) -> dict[Identity, str]:
 
 
 def _analysis(
-    out: Console, member: Member, analysis: model.Analysis, only: set[str] | None, layout: str
+    out: Console, member: Member, analysis: document.Analysis, only: set[str] | None, layout: str
 ) -> None:
     """One analysis: its label, description and counts, then its parts."""
     out.print(f"[bold]{escape(analysis.label or 'Unknown')}[/bold]")
@@ -112,7 +112,7 @@ def _layout(member: Member) -> str:
     return f"{len(declarations)} {noun}"
 
 
-def _output(output: model.Output) -> tuple[str, str]:
+def _output(output: document.Output) -> tuple[str, str]:
     """An output's type and its recipe's command; a switch's decision and cases."""
     if output.is_switch:
         cases = ", ".join(f"{option}: {target}" for option, target in output.cases.items())
@@ -121,7 +121,7 @@ def _output(output: model.Output) -> tuple[str, str]:
     return escape(output.type or ""), command
 
 
-def _universe(universe: model.Universe) -> str:
+def _universe(universe: document.Universe) -> str:
     if universe.is_import:
         return f": imports {universe.analysis}.{universe.universe}"
     if universe.derived_from is not None:
@@ -129,7 +129,7 @@ def _universe(universe: model.Universe) -> str:
     return ""
 
 
-def _decisions(out: Console, analysis: model.Analysis) -> None:
+def _decisions(out: Console, analysis: document.Analysis) -> None:
     """Each decision of `analysis`, as a tree of its rationale and options."""
     for id_, decision in analysis.decisions.items():
         tree = Tree(f"[cyan]{id_}[/cyan]: {escape(decision.label or '')}")

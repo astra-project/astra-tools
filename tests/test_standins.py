@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.sources.standins import BUILT_IN, Dvc, GitAnnex, GitLfs, registered
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
+from astra._internal.sources.standins import BUILT_IN, Dvc, GitAnnex, GitLfs, registered
 from tests.conftest import MINIMAL, repository
 
 ANNEXED = "SHA256E-s6--" + "5" * 64 + ".bin"

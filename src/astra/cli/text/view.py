@@ -7,7 +7,7 @@ from __future__ import annotations
 from rich.text import Text
 
 from astra.cli.text import console
-from astra.resolved import ResolvedAnalysis, Universe
+from astra.model.resolved_analysis import ResolvedAnalysis, Universe
 
 
 def show(analysis: ResolvedAnalysis, universe: Universe) -> None:

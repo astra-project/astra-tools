@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.sources.reader import worktree
-from astra.stack import bind
+from astra._internal.analysis.stack import bind
+from astra._internal.sources.reader import worktree
 from tests.conftest import MINIMAL, repository
 
 

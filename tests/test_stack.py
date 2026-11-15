@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from astra.diagnostics import Diagnostic
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.stack import Element, Identity, Resolution, Stack, bind
+from astra._internal.analysis.stack import Element, Identity, Resolution, Stack, bind
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
+from astra.model.diagnostic import Diagnostic
 from tests.conftest import MINIMAL, repository
 
 SUB = """\

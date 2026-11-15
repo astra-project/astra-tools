@@ -9,8 +9,8 @@ from types import MappingProxyType
 
 from rich.text import Text
 
-from astra.check import CheckReport
 from astra.cli.text import console, rule_line
+from astra.model.check_report import CheckReport
 
 _STYLES = MappingProxyType(
     {

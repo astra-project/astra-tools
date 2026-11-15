@@ -7,10 +7,10 @@ from __future__ import annotations
 from rich.console import Console
 from rich.text import Text
 
+from astra._internal.results.hashing import Digest
+from astra._internal.results.history import Lineage, Link, Version
 from astra.cli.text import console, rule_line
-from astra.hashing import Digest
-from astra.history import Lineage, Link, Version
-from astra.records import ProvenanceRecord
+from astra.model.provenance_record import ProvenanceRecord
 
 
 def show_versions(versions: tuple[Version, ...]) -> None:

@@ -40,8 +40,8 @@ def paper_add(doi: str, version: int | None, pdf: Path | None) -> None:
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
-    from astra.papers.download import download_paper
+    from astra._internal.papers.cache import PaperCache
+    from astra._internal.papers.download import download_paper
 
     cache = PaperCache()
 
@@ -106,7 +106,7 @@ def paper_list() -> None:
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
+    from astra._internal.papers.cache import PaperCache
 
     cache = PaperCache()
     papers = cache.list_papers()
@@ -140,7 +140,7 @@ def paper_show(doi: str, version: int | None) -> None:
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
+    from astra._internal.papers.cache import PaperCache
 
     cache = PaperCache()
     paper = cache.get(doi, version)
@@ -178,7 +178,7 @@ def paper_path(doi: str, version: int | None) -> None:
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
+    from astra._internal.papers.cache import PaperCache
 
     cache = PaperCache()
     path = cache.get_path(doi, version)
@@ -199,7 +199,7 @@ def paper_remove(doi: str, version: int | None) -> None:
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
+    from astra._internal.papers.cache import PaperCache
 
     cache = PaperCache()
 
@@ -229,8 +229,8 @@ def paper_fetch_metadata(doi: str | None, version: int | None, fetch_all: bool) 
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
-    from astra.papers.download import fetch_doi_metadata
+    from astra._internal.papers.cache import PaperCache
+    from astra._internal.papers.download import fetch_doi_metadata
 
     cache = PaperCache()
 
@@ -308,9 +308,9 @@ def paper_verify_quotes(doi: str, version: int | None) -> None:
       1 - Some quotes not found
       2 - Error (paper not cached, invalid input, etc.)
     """
-    from astra.papers.cache import PaperCache
-    from astra.verification.core import VerificationStatus, verify_quote_in_pdf
-    from astra.verification.pdf import extract_text_from_pdf
+    from astra._internal.papers.cache import PaperCache
+    from astra._internal.papers.pdf import extract_text_from_pdf
+    from astra._internal.papers.quotes import VerificationStatus, verify_quote_in_pdf
 
     # Read JSON input from stdin
     try:
@@ -465,9 +465,9 @@ def paper_verify_quote(
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra.papers.cache import PaperCache
-    from astra.verification.core import VerificationStatus, verify_quote_in_pdf
-    from astra.verification.pdf import extract_text_from_pdf
+    from astra._internal.papers.cache import PaperCache
+    from astra._internal.papers.pdf import extract_text_from_pdf
+    from astra._internal.papers.quotes import VerificationStatus, verify_quote_in_pdf
 
     cache = PaperCache()
     cached_paper = cache.get(doi, version)

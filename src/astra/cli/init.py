@@ -48,8 +48,9 @@ def command(directory: Path, check_only: bool, as_json: bool) -> None:
         astra init my-analysis
         astra init --check --json   # is this folder scaffolded? (for scripts and agents)
     """
-    from astra.scaffold import create_boilerplate, write_text
-    from astra.sources.git import GitError, Repository
+    from astra._internal.documents.scaffold import create_boilerplate, write_text
+    from astra._internal.sources.git import Repository
+    from astra.errors import GitError
 
     write = not check_only
     report: dict[str, list[str]] = {"created": [], "repaired": [], "unchanged": [], "warnings": []}

@@ -11,10 +11,10 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.hashing import Digest, digest_bytes, digest_file
-from astra.history import History
-from astra.resolve import read
-from astra.sources.remote import Remotes
+from astra._internal.analysis.resolve import read
+from astra._internal.results.hashing import Digest, digest_bytes, digest_file
+from astra._internal.results.history import History
+from astra._internal.sources.remote import Remotes
 
 MINIMAL = """\
 spec_version: "0.1.0"

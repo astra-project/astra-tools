@@ -23,10 +23,10 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.sources.reader import worktree
-from astra.stack import Element, Identity, bind
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, bind
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.reader import worktree
 from tests.conftest import MINIMAL, git, repository
 
 ROOT = Identity("")

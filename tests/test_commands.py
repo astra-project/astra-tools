@@ -10,9 +10,9 @@ import pytest
 from click.testing import CliRunner, Result
 
 from astra import api
+from astra._internal.analysis.stack import bind
+from astra._internal.sources.reader import worktree
 from astra.cli import main, read_stack
-from astra.sources.reader import worktree
-from astra.stack import bind
 from tests.conftest import MINIMAL, analysis, git, git_init, repository
 
 
@@ -167,22 +167,28 @@ def test_info_shows_only_the_parts_asked_for(tmp_path: Path) -> None:
     assert [part for part in parts if f"\n{part}\n" in shown] == ["Inputs:", "Decisions:"]
 
 
-def test_info_json_is_every_analysis_of_the_stack(tmp_path: Path) -> None:
+def test_info_json_is_the_analysis_as_it_resolves(tmp_path: Path) -> None:
+    """The resolved analysis, as `api.resolve` gives it, which only a valid analysis has: one
+    that breaks a MUST gets the validator's report, and exit 1."""
     files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
     top = repository(tmp_path, files)
-    repository(top, {"astra.yaml": ROOT})
+    valid = ROOT.replace("  missing: {path: nothere}\n", "").replace(
+        ", subanalysis.decision1: a", ""
+    )
+    repository(top, {"astra.yaml": valid})
     result = astra("info", "-f", str(top / "astra.yaml"), "--json")
     assert result.exit_code == 0
     document = json.loads(result.stdout)
-    assert document["shape"] == "astra-info/1"
-    root, sub = document["analyses"][:2]
-    assert (root["file"], root["label"]) == ("astra.yaml", "Example analysis")
-    assert root["analyses"] == {"subanalysis": "subanalysis/astra.yaml", "missing": None}
-    assert root["inputs"] == {"input1": {"path": "data/input1.csv", "description": None}}
-    assert root["outputs"]["output1"]["type"] == "metric"
-    assert list(root["decisions"]["decision1"]["options"]) == ["a", "b"]
-    assert root["universes"]["u2"]["derived_from"] == "u1"
-    assert sub["file"] == "subanalysis/astra.yaml"
+    assert document == api.resolve(top).to_json()
+    root, sub = document["analyses"]
+    assert (root["key"], root["label"]) == ("", "Example analysis")
+    assert root["declares"] == {"subanalysis": "subanalysis"}
+    assert sub["folder"] == "subanalysis"
+    repository(top, {"astra.yaml": ROOT})
+    result = astra("info", "-f", str(top / "astra.yaml"), "--json")
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == api.validate(top).to_json()
+    assert astra("info", "-f", str(top / "astra.yaml")).exit_code == 0
 
 
 # --- init ---
@@ -242,7 +248,7 @@ def test_init_check_writes_nothing_and_json_reports(tmp_path: Path) -> None:
 def test_create_boilerplate_writes_an_empty_analysis_and_nothing_else(tmp_path: Path) -> None:
     """What `astra init` and downstream tools scaffold through: an astra.yaml, valid once its
     folder is in a repository, with no universes folder."""
-    from astra.scaffold import create_boilerplate
+    from astra._internal.documents.scaffold import create_boilerplate
 
     top = git_init(tmp_path)
     create_boilerplate(top / "stage")

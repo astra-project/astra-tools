@@ -14,12 +14,12 @@ import pytest
 from click.testing import CliRunner
 
 from astra import api
+from astra._internal.analysis.resolve import read
+from astra._internal.analysis.stack import bind
+from astra._internal.results.history import History
+from astra._internal.sources.reader import worktree
+from astra._internal.sources.remote import Remotes
 from astra.cli import main
-from astra.history import History
-from astra.resolve import read
-from astra.sources.reader import worktree
-from astra.sources.remote import Remotes
-from astra.stack import bind
 from tests.conftest import MINIMAL, git, repository
 
 NOWHERE = "file:///nowhere/at/all.git"
@@ -402,8 +402,8 @@ def test_the_cli_shows_a_commits_file_with_its_commit(
     assert result.exit_code == 1
     assert f"astra.yaml at {commit} from {url}\n" in result.stdout
     result = CliRunner().invoke(main, ["validate", str(root), "--json"], prog_name="astra")
-    locations = [d["location"] for d in json.loads(result.stdout)["reports"][0]["diagnostics"]]
-    assert {(at["commit"], at["url"]) for at in locations} == {(None, None), (commit, url)}
+    locations = [d["location"] for d in json.loads(result.stdout)["diagnostics"]]
+    assert {(at.get("commit"), at.get("url")) for at in locations} == {(None, None), (commit, url)}
 
 
 # --- in the declaring repository: COMMIT_NOT_FOUND, COMMIT_NOT_ANCESTOR, and the rest at a commit

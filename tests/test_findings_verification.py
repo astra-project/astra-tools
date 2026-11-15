@@ -17,13 +17,13 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from astra.cli import main
-from astra.verification.core import (
+from astra._internal.papers.pdf import PDFDocument
+from astra._internal.papers.quotes import (
     VerificationStatus,
     verify_all_insights,
     verify_evidence,
 )
-from astra.verification.pdf import PDFDocument
+from astra.cli import main
 
 # ---------------------------------------------------------------------------
 # Stub paper cache: returns a pre-built PDFDocument by DOI/version
@@ -57,7 +57,7 @@ def patch_extract(monkeypatch: pytest.MonkeyPatch):
             # Single-PDF fixtures: return the only one we have.
             return next(iter(pdfs.values()))
 
-        monkeypatch.setattr("astra.verification.core.extract_text_from_pdf", fake_extract)
+        monkeypatch.setattr("astra._internal.papers.quotes.extract_text_from_pdf", fake_extract)
         return _StubPaperCache(pdfs)
 
     return _install
@@ -192,4 +192,4 @@ def test_cli_validate_reports_findings_artifact_skipped(tmp_path: Path, patch_ex
     )
 
     as_json = runner.invoke(main, ["validate", str(folder), "-e", "--json"])
-    assert json.loads(as_json.output)["reports"][0]["diagnostics"] == []
+    assert json.loads(as_json.output)["diagnostics"] == []

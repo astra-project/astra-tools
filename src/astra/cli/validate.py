@@ -13,16 +13,13 @@ import click
 from astra.cli import FAILED, environment, read_stack, write_json
 
 if TYPE_CHECKING:
-    from astra import model
-    from astra.diagnostics import Diagnostic
-    from astra.stack import Stack
+    from astra._internal.analysis.stack import Stack
+    from astra._internal.documents.document import Insight
+    from astra.model.diagnostic import Diagnostic
 
 SKIPPED = frozenset({"node_modules", "venv", "__pycache__", "results"})
 """Folders the search for analyses doesn't enter, beside hidden ones: vendored code, and the
 results an analysis makes."""
-
-SHAPE = "astra-validation-reports/1"
-"""The JSON of `validate --json`: the report of each analysis validated."""
 
 
 @click.command("validate")
@@ -61,16 +58,17 @@ def command(
     EVIDENCE_PAPER_UNREADABLE where the paper can't be read, and EVIDENCE_QUOTE_NOT_FOUND
     where the quote isn't in the paper, or isn't on the page its location gives (`page=6`).
 
-    With --json, the reports are printed as JSON, `astra-validation-reports/1`: whether every
-    analysis is valid, and each analysis's report (`astra-validation-report/1`), one for FILE
-    or one for each root analysis. The exit code is unchanged: 0 when every analysis is valid,
-    1 when one breaks a MUST or a quote isn't verified, and 2 when one can't be validated.
+    With --json, the report is printed as JSON, as `astra.api.validate` gives it: its root,
+    whether it is valid, and its diagnostics. For FILE it is the one report; with no FILE, a
+    list of them, one for each root analysis. The exit code is unchanged: 0 when every analysis
+    is valid, 1 when one breaks a MUST or a quote isn't verified, and 2 when one can't be
+    validated.
     """
     options = (verify_evidence and not skip_evidence, skip_evidence, as_json, offline)
     if file is not None:
         valid, document = _validate_one(_folder(file), *options)
         if as_json:
-            write_json({"shape": SHAPE, "valid": valid, "reports": [document]})
+            write_json(document)
         if not valid:
             raise click.exceptions.Exit(FAILED)
         return
@@ -89,7 +87,7 @@ def command(
         if not valid:
             failed.append(str((folder / "astra.yaml").relative_to(top.resolve())))
     if as_json:
-        write_json({"shape": SHAPE, "valid": not failed, "reports": documents})
+        write_json(documents)
     elif failed:
         click.echo()
         click.echo(f"{len(failed)}/{len(roots)} file(s) failed validation: {', '.join(failed)}")
@@ -119,9 +117,9 @@ def _validate_one(
     """Validate the analysis in `folder`, and print its report unless `as_json`. With
     `verify_evidence`, the report holds the evidence's diagnostics too. Gives whether it is
     valid, and the report as JSON."""
-    from astra.sources.reader import worktree
-    from astra.sources.remote import Remotes
-    from astra.validate import validated
+    from astra._internal.analysis.validate import validated
+    from astra._internal.sources.reader import worktree
+    from astra._internal.sources.remote import Remotes
 
     with environment():
         report, context = validated(*worktree(folder), Remotes(offline=offline))
@@ -129,7 +127,12 @@ def _validate_one(
     summary: list[str] = []
     if stack is not None and verify_evidence:
         found, summary = _verify(stack)
-        report = replace(report, diagnostics=(*report.diagnostics, *found))
+        # Each is an error, so a quote that isn't verified leaves the report invalid.
+        report = replace(
+            report,
+            valid=report.valid and not found,
+            diagnostics=(*report.diagnostics, *found),
+        )
     if not as_json:
         from astra.cli.text.validate import show
 
@@ -141,14 +144,14 @@ def _validate_one(
     return report.valid, report.to_json()
 
 
-def _insights(stack: Stack) -> dict[str, dict[str, model.Insight]]:
+def _insights(stack: Stack) -> dict[str, dict[str, Insight]]:
     """The prior insights and findings of the root of `stack`."""
     analysis = stack.analysis(stack.root)
     found = {"prior_insights": analysis.prior_insights, "findings": analysis.findings}
     return {label: dict(insights) for label, insights in found.items() if insights}
 
 
-def _suggest(insights: dict[str, dict[str, model.Insight]]) -> None:
+def _suggest(insights: dict[str, dict[str, Insight]]) -> None:
     """Where the analysis has evidence, say how to verify its quotes."""
     counts = {
         label: (len(found), sum(len(insight.evidence) for insight in found.values()))
@@ -164,14 +167,16 @@ def _suggest(insights: dict[str, dict[str, model.Insight]]) -> None:
         click.echo("Run with --verify-evidence to verify quotes exist in papers.")
 
 
-def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
+def _evidence(insights: dict[str, Insight]) -> dict[str, dict[str, Any]]:
     """Insights as the verification reads them: each evidence with its place in the insight as
     its id, and the page its location gives, which the quote is sought on."""
+    from astra._internal.papers import library
+
     shaped: dict[str, dict[str, Any]] = {}
     for insight_id, insight in insights.items():
         items = []
         for index, item in enumerate(insight.evidence):
-            page = _page(item.location)
+            page = library.page(item.location)
             quote = item.quote
             items.append(
                 {
@@ -189,23 +194,6 @@ def _evidence(insights: dict[str, model.Insight]) -> dict[str, dict[str, Any]]:
     return shaped
 
 
-PDF = (None, "http://tools.ietf.org/rfc/rfc3778")
-"""The `conforms_to` of a PDF fragment identifier: none, or the IRI Web Annotation gives it."""
-
-
-def _page(location: model.FragmentSelector | None) -> int | None:
-    """The page, counted from 1, that the first `page=` of a PDF fragment identifier gives, its
-    parameters joined with `&`; None where the location gives none or follows another syntax,
-    and the quote is then sought in the whole text."""
-    if location is None or location.conforms_to not in PDF:
-        return None
-    for parameter in location.value.split("&"):
-        name, _, value = parameter.partition("=")
-        if name == "page" and value.isascii() and value.isdigit():
-            return int(value)
-    return None
-
-
 def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
     """Verify the quotes of the root's evidence against the cached papers. Gives an error for
     each that isn't verified, at its place in the root's file, as a validation error is given:
@@ -214,10 +202,10 @@ def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
     `EVIDENCE_QUOTE_NOT_FOUND` at a `quote` that isn't in its paper, or isn't on the page its
     `location` gives. And gives the lines that
     sum up what was verified and skipped."""
-    from astra.diagnostics import Diagnostic
-    from astra.papers.cache import PaperCache
-    from astra.verification.cache import VerificationCache
-    from astra.verification.core import VerificationStatus, verify_all_insights
+    from astra._internal.papers.cache import PaperCache
+    from astra._internal.papers.quotes import VerificationStatus, verify_all_insights
+    from astra._internal.papers.verified import VerificationCache
+    from astra.model.diagnostic import Diagnostic
 
     passed = (VerificationStatus.VERIFIED, VerificationStatus.CACHED)
     found: list[Diagnostic] = []

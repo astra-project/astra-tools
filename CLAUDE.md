@@ -18,24 +18,28 @@ Both `astra-spec` and this package share the `astra` Python namespace via implic
 ## Repository Structure
 
 ```
-src/astra/          # NO __init__.py (namespace package), in layers:
-  0 foundations     diagnostics, grammar, model
-  1 reading         sources/ (every byte read), cache, load, contract, scaffold
-  2 binding         stack
-  3 meaning         universes, rules/, validate, resolved (the model), resolve (what builds it)
-  4 results         hashing, records, check, history (the `astra history` command's)
-  5 surfaces        api (the whole public surface), cli/, spec_render,
-                    papers/ and verification/ (the paper cache and quotes, as 0.2 had them)
+src/astra/            # NO __init__.py (namespace package)
+  api.py              the whole public surface: the functions, and every class and error re-exported
+  errors.py           what the functions raise
+  model/              the data model: definitions only, a file for each thing a function returns
+  cli/                the `astra` command; rich only under cli/text/
+  _internal/          everything else, in layers:
+    sources/          every byte read: git, readers, remotes, stand-ins, the cache
+    documents/        a file as a document: load, contract, catalogue, document, grammar,
+                      scaffold, spec_render
+    analysis/         the stack and what it means: stack, universes, rules/, validate, resolve
+    results/          records, hashing, check, history (the `astra history` command's)
+    papers/           the paper cache, downloads, PDF text and quotes; library is what api offers
 ```
 
 ## Key Design Principles
 
-1. **Layers**: a module imports only from its own layer or the ones before it. Rich is imported only under `cli/text/`.
-2. **Levels come from the catalogue**: `MUST` is an error, `SHOULD` a warning. astra-tools' own codes are in `diagnostics.py`.
+1. **Layers**: a module of `_internal` imports only from its own layer, the ones before it, `astra.model` and `astra.errors`; `papers` builds on `sources` alone. `astra.model` imports nothing else of astra-tools. `tests/test_layout.py` keeps both, and what the top level holds. Rich is imported only under `cli/text/`.
+2. **Levels come from the catalogue**: `MUST` is an error, `SHOULD` a warning. astra-tools' own codes are in `_internal/documents/catalogue.py`.
 3. **Import cost is part of the API**: `tests/test_import_cost.py` lists what each module may import. Add new modules there.
 4. **astra-tools runs nothing, and plans no run**: it says what the files mean (`resolve`), whether they are valid (`validate`) and whether the records still hold (`check`). Which results to build, in what order, in which checkout and environment, is a runner's to say. In the specification the *analysis* plans its results; no tool here is a planner. A function that needs a checkout, a clock, or the hash of bytes no Reader gave it belongs in a runner.
-5. **`astra.api` is the public surface**: `validate`, `resolve`, `check`, `write_records`, and the classes of the data model. A tool built on astra-tools imports from there, types included. Add what such a tool needs there, rather than have it reach into a layer.
-6. **The data model is plain data**: frozen dataclasses with no methods beyond `to_json`, holding only what JSON holds. A reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`), never an object; the model holds what the specification's rules give, not what they start from (no switch, no `derived_from`, no template), and each fact once. `Stack`, `Element`, `Identity`, `Planned` and `Context` are how astra-tools works it out, and stay inside.
+5. **`astra.api` is the public surface**: `validate`, `resolve`, `check`, `create_boilerplate`, `write_records`, the paper functions (`paper`, `add_paper`, `verify_quote`), and every class of the data model and error. A tool built on astra-tools imports from there and nowhere else, types included. Add what such a tool needs there, rather than have it reach into `_internal`. Offer a function and plain data, never a class of `_internal`.
+6. **The data model is plain data, defined in `model/` and nowhere else**: frozen dataclasses with no methods beyond `to_json`, holding only what JSON holds. Each file of `model/` defines what one function returns, and no logic. A reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`), never an object; the resolved analysis holds what the specification's rules give, not what they start from (no switch, no `derived_from`, no template), and each fact once. `Stack`, `Element`, `Identity`, `Planned` and `Context` are how astra-tools works it out, and stay inside. One thing has one model and one JSON form (`model.to_json`): a command's `--json` prints the model, never a shape of its own.
 7. **Only a valid analysis resolves**: `resolve` and `check` raise `InvalidAnalysisError` with the validator's report otherwise, so nothing downstream of them handles an undetermined field.
 
 ## Development Commands

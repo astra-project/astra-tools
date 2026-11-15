@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.stack import Element, Identity, bind
-from astra.universes import Building
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, bind
+from astra._internal.analysis.universes import Building
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
 from tests.conftest import repository
 from tests.test_validate import WORKED_EXAMPLE
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from astra import cache
+from astra._internal.sources import cache
 from astra.cli import main
 from tests.conftest import MINIMAL, repository
 

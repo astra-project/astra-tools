@@ -15,13 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from astra import api, rules
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.stack import Element, Identity, Stack, bind
-from astra.universes import Chain, built, imports, pins
+from astra import api
+from astra._internal.analysis import rules
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, Stack, bind
+from astra._internal.analysis.universes import Chain, built, imports, pins
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
 from tests.conftest import repository
 from tests.spec import SPEC
 

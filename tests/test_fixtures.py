@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.contract import Contract
-from astra.diagnostics import Catalogue
-from astra.load import ParseError, load_json
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.documents.contract import Contract
+from astra._internal.documents.load import ParseError, load_json
 from tests.conftest import git_init
 from tests.spec import DOCUMENTS
 

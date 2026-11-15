@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
-from astra import cache
+from astra._internal.sources import cache
 from astra.cli import main
 from tests.conftest import MINIMAL, analysis, git_init
 
@@ -178,7 +178,8 @@ def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
     folder = analysis(folder, MINIMAL + INSIGHT.format(quote="a sentence the paper never says"))
     result = astra("validate", str(folder), "-e", "--json")
     assert result.exit_code == 1
-    (report,) = json.loads(result.stdout)["reports"]
+    report = json.loads(result.stdout)
+    assert report["valid"] is False
     (diagnostic,) = report["diagnostics"]
     assert (diagnostic["code"], diagnostic["level"]) == ("EVIDENCE_QUOTE_NOT_FOUND", "error")
     assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/quote"
