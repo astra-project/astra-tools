@@ -1480,7 +1480,9 @@ def test_evidence_that_cites_an_output_cites_its_planned_results(
         ),
     )
     assert prior.evidence[0].cites is None
+    assert prior.evidence[0].artifact is None
     assert [evidence.cites for evidence in finding.evidence] == [("output1#u1",), ("output2",)]
+    assert [evidence.artifact for evidence in finding.evidence] == ["output1", "output2"]
     assert [
         (option.id, option.insights, option.excluded) for option in root.decisions[0].options
     ] == [
@@ -1494,6 +1496,19 @@ def test_evidence_that_cites_an_output_cites_its_planned_results(
     assert [evidence.cites for evidence in insight.evidence] == [
         ("subanalysis.output1#u1", "subanalysis.output1#u2")
     ]
+    assert [evidence.artifact for evidence in insight.evidence] == ["subanalysis.output1"]
+
+
+def test_evidence_preserves_an_authored_universe_pin(tmp_path: Path) -> None:
+    folder = repository(
+        tmp_path,
+        {
+            "astra.yaml": CITED.replace("artifact: output1", "artifact: output1#u1"),
+            "data/input1.csv": "1\n",
+        },
+    )
+    evidence = api.resolve(folder).analyses[0].findings[0].evidence[0]
+    assert (evidence.artifact, evidence.cites) == ("output1#u1", ("output1#u1",))
 
 
 def nulls(value: Any) -> bool:
@@ -1512,7 +1527,14 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
     written = api.resolve(cited).to_json()
     assert json.loads(json.dumps(written)) == written
     assert not nulls(written)
-    assert list(written) == ["spec_version", "head", "analyses", "results", "notes"]
+    assert list(written) == [
+        "spec_version",
+        "head",
+        "analyses",
+        "results",
+        "notes",
+        "schema_version",
+    ]
     (root,) = written["analyses"]
     assert root == {
         "key": "",
@@ -1590,12 +1612,13 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
                 "evidence": [
                     {
                         "cites": ["output1#u1"],
+                        "artifact": "output1",
                         "location": {
                             "value": "/value",
                             "conforms_to": "https://www.rfc-editor.org/rfc/rfc6901",
                         },
                     },
-                    {"cites": ["output2"]},
+                    {"cites": ["output2"], "artifact": "output2"},
                 ],
                 "tags": [],
             }

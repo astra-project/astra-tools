@@ -31,6 +31,37 @@ Every class is imported from `astra.api`.
 
 In the tables below, *optional* marks a field that can have no value.
 
+### JSON report contract
+
+Each report carries a fixed `schema_version`: `astra-tools.validation-report.v1`,
+`astra-tools.resolved-analysis.v1` or `astra-tools.status-report.v1`. This identifies the JSON format,
+independently of the authored ASTRA `spec_version` and the astra-tools package version.
+The field is set by the report class and adds no constructor argument.
+
+The packaged [reports.schema.json](https://github.com/astra-project/astra-tools/blob/main/src/astra/model/reports.schema.json)
+is a JSON Schema 2019-09 document. Its `$defs` contain the three report types and their nested
+types; the document itself accepts any of the three reports. Other languages can consume it
+without Python. It checks transport structure, not reference integrity or the rules applied
+by `validate`, `resolve` and `status`. In Python, read it with:
+
+```python
+from importlib.resources import files
+
+schema_json = files("astra.model").joinpath("reports.schema.json").read_text("utf-8")
+```
+
+Within a format version, producers may add optional fields; readers should ignore unknown
+fields. Removing or renaming a field, changing its type or meaning, adding a required field,
+or making an optional field required needs a new format version. Lists keep the ordering
+described below; JSON object member order is not part of the interchange contract. Optional
+fields remain omitted, never `null`.
+
+Generate the schema from the Python model with
+`uv run --frozen python scripts/generate-report-schema.py`; tests check it for drift.
+Small, reproducible [report fixtures](https://github.com/astra-project/astra-tools/tree/main/tests/report-fixtures)
+provide expected JSON for independent implementations; they supplement the specification's
+validation conformance suite.
+
 The diagrams are UML class diagrams. A filled diamond is on a class that holds another; a
 hollow diamond is on a class that refers to another by its ref or id. The number beside a class
 says how many, and `[0..1]` after a field marks an optional one, `[*]` a list.
@@ -125,9 +156,10 @@ What validating an analysis found, over its whole stack.
 | `valid` | `bool` | Whether no `MUST` is broken. Warnings don't make an analysis invalid |
 | `diagnostics` | list of [`Diagnostic`](#diagnostic) | Each rule broken: the working tree's files first, then each commit's, each file in order of place |
 | `unchecked` | list of `str` | The validator's codes this astra-tools doesn't check yet |
+| `schema_version` | `str` | Always `astra-tools.validation-report.v1`; the JSON report format |
 
 ```json
-{"root": "astra.yaml", "valid": true, "diagnostics": [], "unchecked": []}
+{"root": "astra.yaml", "valid": true, "diagnostics": [], "unchecked": [], "schema_version": "astra-tools.validation-report.v1"}
 ```
 
 ## The resolved analysis
@@ -314,6 +346,7 @@ classDiagram
 | `analyses` | list of [`Analysis`](#analysis) | The driving analysis, then each it declares, directly or not, by key |
 | `results` | list of [`Result`](#result) | The results, each after every result it reads |
 | `notes` | list of [`Diagnostic`](#diagnostic) | What an author may want to tidy, which breaks no rule |
+| `schema_version` | `str` | Always `astra-tools.resolved-analysis.v1`; the JSON report format |
 
 The notes are `FALLBACK_PIN`, `UNPLANNED_OUTPUT` and `NOT_BUILT`, at the level `note`, and the
 runner rule `CODE_OUTSIDE_ANALYSIS`, a warning.
@@ -443,6 +476,11 @@ What a claim rests on: a work, by its `doi`, or the results of an output, in `ci
 | `cites` | list of `str`, optional | For evidence that cites an output, the id of each result it cites; empty where the output has no result |
 | `quote` | [`TextQuoteSelector`](#textquoteselector), optional | |
 | `location` | [`FragmentSelector`](#fragmentselector), optional | |
+| `artifact` | `str`, optional | The artifact address as authored, scoped to the analysis containing the insight |
+
+`artifact` preserves a switch address and any `#universe` pin. It remains present when `cites`
+is empty, so a reader can identify what the author cited even where no result is planned. It
+is an authored address, not a canonical ref. Evidence citing a DOI has no `artifact`.
 
 ### `TextQuoteSelector`
 
@@ -603,7 +641,8 @@ universes:
       "command": "python fit.py data/catalog.csv ols results/baseline/fit.json"
     }
   ],
-  "notes": []
+  "notes": [],
+  "schema_version": "astra-tools.resolved-analysis.v1"
 }
 ```
 
@@ -666,6 +705,7 @@ classDiagram
 | `statuses` | map of `str` to [`Status`](#status) | Each result's status, by the result's id, in the results' order |
 | `evidence` | list of [`EvidenceStatus`](#evidencestatus) | The status of each evidence that cites an output |
 | `inputs` | map of `str` to [`Bytes`](#bytes) | Where each input's content is, by the input's ref |
+| `schema_version` | `str` | Always `astra-tools.status-report.v1`; the JSON report format |
 
 ### `Status`
 
@@ -764,7 +804,8 @@ For the analysis above, before anything is built, `status` gives:
     }
   },
   "evidence": [],
-  "inputs": {"inputs.catalog": {"state": "present"}}
+  "inputs": {"inputs.catalog": {"state": "present"}},
+  "schema_version": "astra-tools.status-report.v1"
 }
 ```
 

@@ -326,6 +326,7 @@ class _Builder:
                         else None,
                         evidence.quote,
                         evidence.location,
+                        evidence.artifact,
                     )
                     for index, evidence in enumerate(each.evidence)
                 ),

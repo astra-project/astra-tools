@@ -1154,7 +1154,7 @@ def test_the_report_as_json_holds_each_status_by_result_id(worked: Path) -> None
     report = api.status(worked)
     shape = report.to_json()
     assert json.loads(json.dumps(shape)) == shape
-    assert list(shape) == ["head", "statuses", "evidence", "inputs"]
+    assert list(shape) == ["head", "statuses", "evidence", "inputs", "schema_version"]
     assert shape["head"] == git(worked, "rev-parse", "HEAD").strip()
     assert list(shape["statuses"]) == ["output1#u1", "output1#u2", "output2"]
     record = json.loads((worked / ".astra" / "records" / "output2.json").read_text("utf-8"))

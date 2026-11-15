@@ -644,9 +644,9 @@ def test_evidence_citing_a_switch_cites_the_case_it_takes_in_each_universe(
     driving analysis's universes of the case the switch takes there, and gets the worst of
     their statuses."""
     report = api.status(checked)
-    assert cited(api.resolve(checked), report) == {
-        "findings.finding1": (("base", "other"), "unchanged")
-    }
+    resolved = api.resolve(checked)
+    assert resolved.analyses[0].findings[0].evidence[0].artifact == "sw"
+    assert cited(resolved, report) == {"findings.finding1": (("base", "other"), "unchanged")}
     (checked / ".astra" / "records" / "other.json").unlink()
     report = api.status(checked)
     assert cited(api.resolve(checked), report) == {
@@ -666,7 +666,14 @@ def test_evidence_citing_a_switch_that_takes_nothing_is_missing(checked: Path) -
     ) + ("  finding2:\n    claim: The gap is cited.\n    evidence:\n      - artifact: gap\n")
     (checked / "astra.yaml").write_text(text, "utf-8")
     report = api.status(checked)
-    assert cited(api.resolve(checked), report) == {
+    resolved = api.resolve(checked)
+    evidence = resolved.analyses[0].findings[1].evidence[0]
+    assert (evidence.artifact, evidence.cites) == ("gap", ())
+    assert resolved.to_json()["analyses"][0]["findings"][1]["evidence"][0] == {
+        "artifact": "gap",
+        "cites": [],
+    }
+    assert cited(resolved, report) == {
         "findings.finding1": (("base", "other"), "unchanged"),
         "findings.finding2": ((), "missing"),
     }

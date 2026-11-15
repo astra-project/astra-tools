@@ -272,6 +272,7 @@ def test_the_report_as_json(outside: Path) -> None:
             }
         ],
         "unchecked": list(validate.unchecked(Catalogue.load())),
+        "schema_version": "astra-tools.validation-report.v1",
     }
 
 
