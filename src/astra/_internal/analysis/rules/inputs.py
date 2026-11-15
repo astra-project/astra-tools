@@ -102,7 +102,7 @@ def _elsewhere(reader: Reader, folder: str, path: str) -> str | None:
     is inside that folder and outside every folder below it holding an `astra.yaml` file."""
     if not paths.lies_inside(path, folder):
         return f"is outside this analysis's folder: {_ELSEWHERE}"
-    inner = analysis_below(reader, folder, posixpath.relpath(path, folder or "."))
+    inner = analysis_below(reader, folder, path[len(folder) + 1 :] if folder else path)
     if inner is not None:
         return f"is inside `{inner}`, which holds an analysis of its own: {_ELSEWHERE}"
     return None

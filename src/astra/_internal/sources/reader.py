@@ -102,7 +102,7 @@ class WorktreeReader:
     top: Path  # the top of the repository's working tree, or the analysis's folder without one
     repo: Repository | None
     _listed: dict[str, dict[str, Kind] | None] = field(
-        default_factory=dict, compare=False, repr=False
+        init=False, default_factory=dict, compare=False, repr=False
     )
 
     def read(self, path: str, limit: int | None = None) -> bytes:
