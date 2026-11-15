@@ -80,6 +80,12 @@
           "items": {
             "$ref": "#/$defs/Universe"
           }
+        },
+        "switches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Switch"
+          }
         }
       },
       "required": [
@@ -93,6 +99,24 @@
         "prior_insights",
         "findings",
         "universes"
+      ]
+    },
+    "AuthoredReference": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "universe": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry",
+        "target"
       ]
     },
     "Bytes": {
@@ -224,6 +248,30 @@
           "$ref": "#/$defs/FragmentSelector"
         },
         "artifact": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceBinding"
+          }
+        }
+      },
+      "required": []
+    },
+    "EvidenceBinding": {
+      "type": "object",
+      "properties": {
+        "universe": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "target_universe": {
+          "type": "string"
+        },
+        "result": {
           "type": "string"
         }
       },
@@ -473,6 +521,12 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthoredReference"
           }
         }
       },
@@ -747,6 +801,28 @@
         "evidence",
         "inputs",
         "schema_version"
+      ]
+    },
+    "Switch": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "cases": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthoredReference"
+          }
+        }
+      },
+      "required": [
+        "ref",
+        "decision",
+        "cases"
       ]
     },
     "TextQuoteSelector": {

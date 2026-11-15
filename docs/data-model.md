@@ -169,7 +169,7 @@ rules decide what is in it.
 
 It holds **what the rules give, not what they start from**. Where an `astra.yaml` writes
 something only for a rule to act on, the model holds the outcome: a universe's effective
-selection and no `derived_from`, what each entry of an output's `inputs` reads and no switch,
+selection and no `derived_from`, what each result's `inputs` reads,
 a command as it runs and no template. What a file writes for people to read stays as written:
 labels, descriptions, rationales, claims, quotes.
 
@@ -375,6 +375,7 @@ One analysis of the stack, with what it declares.
 | `prior_insights` | list of [`Insight`](#insight) | |
 | `findings` | list of [`Insight`](#insight) | |
 | `universes` | list of [`Universe`](#universe) | |
+| `switches` | list of [`Switch`](#switch), optional | Authored switches, including unplanned branches; absent in older reports |
 
 ### `Commit`
 
@@ -422,6 +423,48 @@ One of a decision's options.
 | `excluded` | `str`, optional | Why it is excluded: such an option is never selected |
 | `insights` | list of `str` | The prior insights that support it, by ref |
 
+### `AuthoredReference`
+
+An authored address resolved to a canonical target, without evaluating switches.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `entry` | `str` | The address as written, including any pin |
+| `target` | `str` | Canonical input, output or switch ref |
+| `universe` | `str`, optional | The canonical universe named by the pin, when resolved |
+
+### `Switch`
+
+A separate authored graph node, never a planned result or a concrete output.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ref` | `str` | Canonical ref in the `switches` collection |
+| `decision` | `str` | Canonical decision ref |
+| `cases` | map of `str` to [`AuthoredReference`](#authoredreference) | All authored cases keyed by option ID, including inactive branches |
+
+### `EvidenceBinding`
+
+One evaluation of artifact evidence. An omitted `output` means no concrete target was
+selected. A target can exist without a planned result. `cites` remains the ordered unique
+list of result IDs in these bindings. A pinned artifact has one binding in its pinned
+universe; consumers must retain that binding regardless of their current selection.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `universe` | `str`, optional | Evaluation universe, or the artifact's pin; absent for universe-independent evidence |
+| `output` | `str`, optional | Effective canonical output ref |
+| `target_universe` | `str`, optional | Effective output universe after following pins; absent for once-built outputs |
+| `result` | `str`, optional | Planned result ID, if any |
+
+```mermaid
+classDiagram
+  Analysis *-- Switch
+  Switch *-- AuthoredReference
+  Output *-- AuthoredReference
+  Evidence *-- EvidenceBinding
+```
+
 ### `Output`
 
 What an analysis declares it makes. A switch isn't one: where a file writes a switch, each
@@ -437,6 +480,7 @@ result that reads it names what it reads there, in its `inputs`.
 | `tags` | list of `str` | |
 | `resources` | [`Resources`](#resources), optional | What its recipe asks for |
 | `decisions` | list of `str` | The decisions it is made with, by ref |
+| `inputs` | list of [`AuthoredReference`](#authoredreference), optional | Authored dependencies in input order, including unplanned outputs; absent in older reports |
 
 ### `Resources`
 
@@ -477,6 +521,7 @@ What a claim rests on: a work, by its `doi`, or the results of an output, in `ci
 | `quote` | [`TextQuoteSelector`](#textquoteselector), optional | |
 | `location` | [`FragmentSelector`](#fragmentselector), optional | |
 | `artifact` | `str`, optional | The artifact address as authored, scoped to the analysis containing the insight |
+| `bindings` | list of [`EvidenceBinding`](#evidencebinding), optional | Artifact evaluations before aggregating `cites`; absent for DOI evidence and older reports |
 
 `artifact` preserves a switch address and any `#universe` pin. It remains present when `cites`
 is empty, so a reader can identify what the author cited even where no result is planned. It
@@ -598,13 +643,27 @@ universes:
       "label": "Example",
       "tags": [],
       "declares": {},
-      "inputs": [{"ref": "inputs.catalog", "path": "data/catalog.csv", "tags": []}],
+      "inputs": [
+        {
+          "ref": "inputs.catalog",
+          "path": "data/catalog.csv",
+          "tags": []
+        }
+      ],
       "decisions": [
         {
           "ref": "decisions.method",
           "options": [
-            {"id": "ols", "tags": [], "insights": []},
-            {"id": "robust", "tags": [], "insights": []}
+            {
+              "id": "ols",
+              "tags": [],
+              "insights": []
+            },
+            {
+              "id": "robust",
+              "tags": [],
+              "insights": []
+            }
           ],
           "tags": []
         }
@@ -615,14 +674,29 @@ universes:
           "type": "metric",
           "format": "json",
           "tags": [],
-          "decisions": ["decisions.method"]
+          "decisions": [
+            "decisions.method"
+          ],
+          "inputs": [
+            {
+              "entry": "catalog",
+              "target": "inputs.catalog"
+            }
+          ]
         }
       ],
       "prior_insights": [],
       "findings": [],
       "universes": [
-        {"ref": "universes.baseline", "selection": {"decisions.method": "ols"}, "tags": []}
-      ]
+        {
+          "ref": "universes.baseline",
+          "selection": {
+            "decisions.method": "ols"
+          },
+          "tags": []
+        }
+      ],
+      "switches": []
     }
   ],
   "results": [
@@ -637,7 +711,12 @@ universes:
         }
       ],
       "universe": "universes.baseline",
-      "inputs": [{"entry": "catalog", "input": "inputs.catalog"}],
+      "inputs": [
+        {
+          "entry": "catalog",
+          "input": "inputs.catalog"
+        }
+      ],
       "command": "python fit.py data/catalog.csv ols results/baseline/fit.json"
     }
   ],

@@ -47,9 +47,11 @@ from astra.errors import InvalidAnalysisError
 from astra.model.diagnostic import Diagnostic
 from astra.model.resolved_analysis import (
     Analysis,
+    AuthoredReference,
     Commit,
     Decision,
     Evidence,
+    EvidenceBinding,
     Input,
     Insight,
     Option,
@@ -58,6 +60,7 @@ from astra.model.resolved_analysis import (
     ResolvedAnalysis,
     Result,
     Source,
+    Switch,
     Universe,
 )
 
@@ -209,7 +212,11 @@ class _Builder:
 
     def ref(self, element: Element) -> str:
         """An element's ref: its analysis's key, its collection and its id."""
-        return _ref(self.keys[element.analysis], f"{element.kind}s", element.id)
+        return _ref(
+            self.keys[element.analysis],
+            "switches" if element.kind == "switch" else f"{element.kind}s",
+            element.id,
+        )
 
     def commit(self, identity: Identity) -> Commit | None:
         """The commit `identity` is read at, where that isn't the tree the root is read in."""
@@ -267,6 +274,11 @@ class _Builder:
             self.insights(identity, "prior_insights", written.prior_insights),
             self.insights(identity, "findings", written.findings),
             tuple(self.universe(universe) for universe in own_universes(stack, identity)),
+            tuple(
+                self.switch(Element(identity, "switch", id_))
+                for id_, each in written.outputs.items()
+                if each.is_switch
+            ),
         )
 
     def output(self, element: Element, written: document.Output) -> Output:
@@ -286,6 +298,27 @@ class _Builder:
             written.tags,
             written.recipe.resources,
             tuple(decisions),
+            tuple(
+                self.reference(entry)
+                for entry in self.context.written[element]
+                if entry.field == "inputs"
+            ),
+        )
+
+    def reference(self, entry: Resolution) -> AuthoredReference:
+        assert entry.element is not None
+        pin = self.context.pins.get(entry)
+        return AuthoredReference(
+            entry.written, self.ref(entry.element), self.ref(pin) if pin is not None else None
+        )
+
+    def switch(self, element: Element) -> Switch:
+        switch = self.stack.switches[element]
+        assert switch.decision.element is not None
+        return Switch(
+            self.ref(element),
+            self.ref(switch.decision.element),
+            {option: self.reference(entry) for option, entry in switch.cases.items()},
         )
 
     def universe(self, element: Element) -> Universe:
@@ -327,6 +360,9 @@ class _Builder:
                         evidence.quote,
                         evidence.location,
                         evidence.artifact,
+                        self.bindings(identity, (collection, id_, "evidence", index, "artifact"))
+                        if evidence.artifact is not None
+                        else None,
                     )
                     for index, evidence in enumerate(each.evidence)
                 ),
@@ -339,24 +375,38 @@ class _Builder:
         )
 
     def cited(self, identity: Identity, pointer: tuple[str | int, ...]) -> tuple[str, ...]:
-        """The id of each planned result the evidence whose `artifact` is at `pointer` of
-        `identity`'s file cites (Results *Evidence*), each once: one where its `artifact` is
-        pinned or names an output built once; and otherwise, where it names an output built per
-        universe or a switch, in each of the root's universes, its output's result there, or the
-        result of the case the switch takes there. None where a switch on the way takes no case,
-        or what it reaches has no planned result."""
+        return tuple(
+            dict.fromkeys(
+                binding.result
+                for binding in self.bindings(identity, pointer)
+                if binding.result is not None
+            )
+        )
+
+    def bindings(
+        self, identity: Identity, pointer: tuple[str | int, ...]
+    ) -> tuple[EvidenceBinding, ...]:
         entry = self.artifacts[identity, pointer]
         element = entry.element
-        assert element is not None  # every address of a valid stack names something
-        universes: tuple[Element | None, ...] = (None,)
-        per_universe = element.kind == "switch" or element in self.context.per_universe
-        if entry.pin is None and per_universe:
+        assert element is not None
+        universes: tuple[Element | None, ...] = (self.context.pins.get(entry),)
+        if entry.pin is None and (element.kind == "switch" or element in self.context.per_universe):
             universes = own_universes(self.stack, self.stack.root)
-        found: dict[str, None] = {}
+        found = []
         for universe in universes:
             through = self.context.meaning.through(entry, universe)
-            if through is not None and (at := (through.target, through.universe)) in self.ids:
-                found[self.ids[at]] = None
+            found.append(
+                EvidenceBinding(
+                    self.ref(universe) if universe is not None else None,
+                    self.ref(through.target) if through is not None else None,
+                    self.ref(through.universe)
+                    if through is not None and through.universe is not None
+                    else None,
+                    self.ids.get((through.target, through.universe))
+                    if through is not None
+                    else None,
+                )
+            )
         return tuple(found)
 
     def result(self, planned: Planned) -> Result:

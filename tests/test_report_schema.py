@@ -72,7 +72,18 @@ def examples() -> dict[str, dict[str, Any]]:
         "findings.conclusion",
         "finding",
         "A claim",
-        (evidence, api.Evidence(cites=("fit#baseline",), artifact="fit#baseline")),
+        (
+            evidence,
+            api.Evidence(
+                cites=("fit#baseline",),
+                artifact="fit#baseline",
+                bindings=(
+                    api.EvidenceBinding(
+                        "universes.baseline", "outputs.fit", "universes.baseline", "fit#baseline"
+                    ),
+                ),
+            ),
+        ),
         "Conclusion",
         "Details",
         "Scope",
@@ -89,6 +100,13 @@ def examples() -> dict[str, dict[str, Any]]:
         outputs=(
             api.Output(
                 "outputs.fit", "metric", "json", resources=api.Resources(2, "1G", "1h", "2G", 1)
+            ),
+        ),
+        switches=(
+            api.Switch(
+                "switches.chosen",
+                "decisions.method",
+                {"a": api.AuthoredReference("fit#baseline", "outputs.fit", "universes.baseline")},
             ),
         ),
         findings=(insight,),

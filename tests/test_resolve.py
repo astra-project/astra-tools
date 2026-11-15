@@ -800,7 +800,11 @@ def test_a_decision_an_output_lists_under_two_addresses_is_one_of_its_decisions(
     files = {"astra.yaml": listing, "stage/astra.yaml": STAGE, "stage/inner/astra.yaml": INNER}
     analysis = api.resolve(repository(tmp_path, files))
     assert analysis.analyses[0].outputs[0] == api.Output(
-        "outputs.through_inner", "metric", "json", decisions=("inner.decisions.decision1",)
+        "outputs.through_inner",
+        "metric",
+        "json",
+        decisions=("inner.decisions.decision1",),
+        inputs=(api.AuthoredReference("inner.output1", "inner.outputs.output1"),),
     )
     assert by_id(analysis)["through_inner#u2"].command == (
         "python make.py 'results/u2/inner.output1.json' 'b' 'b' 'results/u2/through_inner.json'"
@@ -1543,6 +1547,7 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
         "description": "An analysis whose options cite prior insights.",
         "tags": ["example"],
         "declares": {},
+        "switches": [],
         "inputs": [
             {"ref": "inputs.input1", "path": "data/input1.csv", "label": "The input", "tags": []}
         ],
@@ -1577,12 +1582,14 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
                 "label": "The output",
                 "tags": [],
                 "resources": {"cpus": 2, "memory": "4GB"},
+                "inputs": [{"entry": "input1", "target": "inputs.input1"}],
                 "decisions": ["decisions.decision1"],
             },
             {
                 "ref": "outputs.output2",
                 "type": "table",
                 "format": "tar.gz",
+                "inputs": [],
                 "tags": [],
                 "decisions": [],
             },
@@ -1613,12 +1620,24 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
                     {
                         "cites": ["output1#u1"],
                         "artifact": "output1",
+                        "bindings": [
+                            {
+                                "universe": "universes.u1",
+                                "output": "outputs.output1",
+                                "target_universe": "universes.u1",
+                                "result": "output1#u1",
+                            }
+                        ],
                         "location": {
                             "value": "/value",
                             "conforms_to": "https://www.rfc-editor.org/rfc/rfc6901",
                         },
                     },
-                    {"cites": ["output2"], "artifact": "output2"},
+                    {
+                        "cites": ["output2"],
+                        "artifact": "output2",
+                        "bindings": [{"output": "outputs.output2", "result": "output2"}],
+                    },
                 ],
                 "tags": [],
             }

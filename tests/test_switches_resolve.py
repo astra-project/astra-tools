@@ -672,9 +672,49 @@ def test_evidence_citing_a_switch_that_takes_nothing_is_missing(checked: Path) -
     assert resolved.to_json()["analyses"][0]["findings"][1]["evidence"][0] == {
         "artifact": "gap",
         "cites": [],
+        "bindings": [{"universe": "universes.u1"}, {"universe": "universes.u2"}],
     }
     assert cited(resolved, report) == {
         "findings.finding1": (("base", "other"), "unchanged"),
         "findings.finding2": ((), "missing"),
     }
     assert statuses(report) == UNCHANGED
+
+
+def test_evidence_bindings_keep_once_built_cases_and_authored_graph(tmp_path: Path) -> None:
+    analysis = api.resolve(repository(tmp_path, {"astra.yaml": CHECKED}))
+    root = analysis.analyses[0]
+    assert root.findings[0].evidence[0].bindings == (
+        api.EvidenceBinding("universes.u1", "outputs.base", result="base"),
+        api.EvidenceBinding("universes.u2", "outputs.other", result="other"),
+    )
+    assert root.switches == (
+        api.Switch(
+            "switches.sw",
+            "decisions.decision1",
+            {
+                "a": api.AuthoredReference("base", "outputs.base"),
+                "b": api.AuthoredReference("base", "outputs.base"),
+                "c": api.AuthoredReference("other", "outputs.other"),
+            },
+        ),
+    )
+    assert root.outputs[-1].inputs == (api.AuthoredReference("sw", "switches.sw"),)
+
+
+def test_bindings_and_authored_edges_survive_without_planned_results(tmp_path: Path) -> None:
+    files = {
+        "astra.yaml": 'spec_version: "0.1.0"\nanalyses: {child: {path: child}}\n',
+        "child/astra.yaml": CHECKED,
+    }
+    analysis = api.resolve(repository(tmp_path, files))
+    assert analysis.results == ()
+    child = analysis.analyses[1]
+    assert child.switches and child.outputs[-1].inputs
+    # A pinned switch is evaluated in its own universe even when the root plans nothing.
+    files["child/astra.yaml"] = CHECKED.replace("artifact: sw", "artifact: sw#u1")
+    (tmp_path / "child/astra.yaml").write_text(files["child/astra.yaml"])
+    child = api.resolve(tmp_path).analyses[1]
+    assert child.findings[0].evidence[0].bindings == (
+        api.EvidenceBinding("child.universes.u1", "child.outputs.base"),
+    )
