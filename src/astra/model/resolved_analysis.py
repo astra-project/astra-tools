@@ -205,7 +205,8 @@ class Place:
 
     address: str  # the name, then `#` and the universe's id for a result built in one
     record_path: str
-    bytes_path: str
+    file_path: str  # the result's file, where the specification puts its bytes by default: a
+    # stand-in may be there in their place, as `Status.bytes` says
 
 
 @dataclass(frozen=True)

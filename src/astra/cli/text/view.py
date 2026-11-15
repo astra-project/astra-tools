@@ -18,7 +18,7 @@ def show(analysis: ResolvedAnalysis, universe: Universe) -> None:
     for result in analysis.results:
         if result.universe != universe.ref:
             continue
-        out.print(Text.assemble((result.id, "bold"), f"  {result.places[0].bytes_path}"))
+        out.print(Text.assemble((result.id, "bold"), f"  {result.places[0].file_path}"))
         for source in result.inputs:
             out.print(f"  {source.entry} reads {source.input or source.result}")
         if result.command is not None:

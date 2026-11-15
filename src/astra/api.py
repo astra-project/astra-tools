@@ -69,11 +69,12 @@ from astra.model.resolved_analysis import (
     TextQuoteSelector,
     Universe,
 )
-from astra.model.status_report import EvidenceStatus, Status, StatusReport
+from astra.model.status_report import Bytes, EvidenceStatus, Status, StatusReport
 from astra.model.validation_report import ValidationReport
 
 __all__ = [
     "Analysis",
+    "Bytes",
     "CacheError",
     "Commit",
     "Decision",

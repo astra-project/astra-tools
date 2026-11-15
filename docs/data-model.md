@@ -181,7 +181,7 @@ classDiagram
   class Place {
     address : str
     record_path : str
-    bytes_path : str
+    file_path : str
   }
   class Source {
     entry : str
@@ -500,7 +500,7 @@ Where one name of a result is kept.
 |---|---|---|
 | `address` | `str` | The name, then `#` and the universe's id for a result built in one |
 | `record_path` | `str` | Where its record goes |
-| `bytes_path` | `str` | Where its bytes go |
+| `file_path` | `str` | The result's file, where its bytes go. A stand-in may be there in their place: its [`Status`](#status) says |
 
 ### `Source`
 
@@ -586,7 +586,7 @@ universes:
         {
           "address": "fit#baseline",
           "record_path": ".astra/records/baseline/fit.json",
-          "bytes_path": "results/baseline/fit.json"
+          "file_path": "results/baseline/fit.json"
         }
       ],
       "universe": "universes.baseline",
@@ -606,8 +606,12 @@ the analysis itself. Each status is under its result's id, and `resolve` gives t
 
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where
-a place has no record that is the result's own. Separately, its bytes are `present` where those
-at its place hash to its record's, and `absent` otherwise.
+a place has no record that is the result's own.
+
+Separately, the report says where the [bytes](#bytes) of each result and of each input are:
+`present` where reading the file gives its content, and `absent` otherwise. A result's state
+doesn't depend on its bytes, so a clone that hasn't fetched what a large-file tool keeps reads
+as up to date, with those bytes `absent`.
 
 ```mermaid
 classDiagram
@@ -617,8 +621,11 @@ classDiagram
   }
   class Status {
     state : unchanged, stale or missing
-    bytes : present or absent [0..1]
     stale_inputs : entry [*]
+  }
+  class Bytes {
+    state : present or absent
+    kept_by : str [0..1]
   }
   class EvidenceStatus {
     insight : ref
@@ -627,11 +634,15 @@ classDiagram
   }
   class ProvenanceRecord
   class Result
+  class Input
   class Diagnostic
   class Insight
   StatusReport *-- "*" Status : statuses, by result id
   StatusReport *-- "*" EvidenceStatus : evidence
+  StatusReport *-- "*" Bytes : inputs, by input ref
   StatusReport o-- "*" Result : statuses, by id
+  StatusReport o-- "*" Input : inputs, by ref
+  Status *-- "0..1" Bytes : bytes
   Status *-- "0..1" ProvenanceRecord : record
   Status *-- "*" Diagnostic : why
   EvidenceStatus *-- "*" Diagnostic : why
@@ -645,6 +656,7 @@ classDiagram
 | `head` | `str`, optional | The commit the repository was on when it was read, as [`ResolvedAnalysis`](#resolvedanalysis) gives it |
 | `statuses` | map of `str` to [`Status`](#status) | Each result's status, by the result's id, in the results' order |
 | `evidence` | list of [`EvidenceStatus`](#evidencestatus) | The status of each evidence that cites an output |
+| `inputs` | map of `str` to [`Bytes`](#bytes) | Where each input's content is, by the input's ref |
 
 ### `Status`
 
@@ -653,15 +665,47 @@ A result's status: the worst of its places'.
 | Field | Type | Meaning |
 |---|---|---|
 | `state` | `str` | `unchanged`, `stale` or `missing` |
-| `bytes` | `str`, optional | `present` or `absent`; none for a result of an analysis read at a commit that no recipe reads |
+| `bytes` | [`Bytes`](#bytes), optional | Where its bytes are; none for a result of an analysis read at a commit that no recipe reads |
 | `record` | [`ProvenanceRecord`](#provenancerecord), optional | Its record, where every place holds one that is the result's: the first place's |
 | `why` | list of [`Diagnostic`](#diagnostic) | Each rule the result itself breaks |
 | `stale_inputs` | list of `str` | Each entry of its output's `inputs` that reads a result that isn't unchanged, or one made again since with other bytes than the record gives |
 
 A result that is `stale` with no error in `why` is stale only through what it reads. It is
 unchanged again once each of those is built with the bytes its record gives for the entry,
-which a runner that builds them can tell without a second check. `ABSENT_RESULT` is a warning:
-bytes that aren't in a clone don't make a result stale.
+which a runner that builds them can tell without a second check.
+
+### `Bytes`
+
+Whether the content of a file the analysis names is in this clone: an input's, or a result's.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | `str` | `present` where reading the file's path gives the content; `absent` otherwise. For a result, the content is the one its record gives |
+| `kept_by` | `str`, optional | The tool whose stand-in is at the path: `git-annex`, `Git LFS` or `DVC` |
+
+`absent` with a `kept_by` means the content needs fetching, with that tool. astra-tools never
+fetches: when and how is a runner's to decide.
+
+A **stand-in** is what a large-file tool keeps in a file's place. astra-tools reads three:
+
+| Tool | Its stand-in | The content is here when | Compared without the content |
+|---|---|---|---|
+| git-annex, locked file | A link into `annex/objects`, at the path | The link leads to a file | Yes, for a key of a SHA-256 backend, which is the default |
+| git-annex, unlocked file | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes, the same |
+| Git LFS | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes |
+| DVC | A `.dvc` file beside the path | A file is at the path | No: it gives an MD5, and a record a SHA-256 |
+
+So with git-annex and Git LFS, an analysis whose inputs and results aren't fetched validates,
+and its results read `unchanged`. With DVC, results that aren't fetched read `unchanged` too,
+but **an input kept by DVC must be pulled** for the results made from it to be compared: until
+then they read `stale`. The same holds for a git-annex key of a backend other than SHA-256.
+
+`kept_by` names the stand-in that is on disk. A file whose content a tool has put in place of
+its pointer, as git-annex does for an unlocked file and Git LFS always, reads as a plain file.
+
+`ABSENT_RESULT`, a warning, is for bytes that are neither at a result's file nor stood in for
+there: no file, other bytes, or a stand-in for other bytes. A stand-in for the recorded bytes
+breaks no rule.
 
 ### `EvidenceStatus`
 
@@ -685,7 +729,7 @@ For the analysis above, before anything is built, `status` gives:
   "statuses": {
     "fit#baseline": {
       "state": "missing",
-      "bytes": "absent",
+      "bytes": {"state": "absent"},
       "why": [
         {
           "code": "MISSING_RECORD",
@@ -698,7 +742,8 @@ For the analysis above, before anything is built, `status` gives:
       "stale_inputs": []
     }
   },
-  "evidence": []
+  "evidence": [],
+  "inputs": {"inputs.catalog": {"state": "present"}}
 }
 ```
 

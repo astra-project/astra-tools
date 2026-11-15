@@ -1,7 +1,8 @@
-"""The status report as text: each result, by its id, with its statuses and where its
-record is, then why, as `line:col level CODE message`, each entry that reads a result that
-isn't unchanged, and the environment its record names with the runner that recorded it, which is
-the one to say what that environment holds; then the evidence, by the insight it backs."""
+"""The status report as text: each result, by its id, with its statuses and where its record
+is, then why, as `line:col level CODE message`, each entry that reads a result that isn't
+unchanged, and the environment its record names with the runner that recorded it, which is the
+one to say what that environment holds; then the evidence, by the insight it backs, and each
+input whose content isn't here. Bytes come with the tool that keeps them, where one does."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from rich.text import Text
 
 from astra.cli.text import console, rule_line
 from astra.model.resolved_analysis import ResolvedAnalysis
-from astra.model.status_report import StatusReport
+from astra.model.status_report import Bytes, StatusReport
 
 _STYLES = MappingProxyType(
     {
@@ -35,8 +36,8 @@ def show(analysis: ResolvedAnalysis, report: StatusReport) -> None:
         counts[status.state] += 1
         if status.bytes is not None:
             line.append("  ")
-            line.append(status.bytes, style=_STYLES[status.bytes])
-            counts["absent"] += status.bytes == "absent"
+            line.append_text(_bytes(status.bytes))
+            counts["absent"] += status.bytes.state == "absent"
         line.append("  " + ", ".join(place.record_path for place in result.places), style="dim")
         out.print(line)
         for broken in status.why:
@@ -55,7 +56,18 @@ def show(analysis: ResolvedAnalysis, report: StatusReport) -> None:
         out.print(line)
         for broken in evidence.why:
             out.print(rule_line(broken.location, broken.level, broken.code, broken.message))
+    for ref, content in report.inputs.items():
+        if content.state == "absent":  # an input whose content is here needs no word
+            out.print(Text.assemble((ref, "bold"), "  ", _bytes(content)))
     out.print(
         f"{len(report.statuses)} result(s), {counts['unchanged']} unchanged, "
         f"{counts['stale']} stale, {counts['missing']} missing; {counts['absent']} absent"
     )
+
+
+def _bytes(content: Bytes) -> Text:
+    """Where some bytes are: `present` or `absent`, and the tool that keeps them."""
+    shown = Text(content.state, style=_STYLES[content.state])
+    if content.kept_by is not None:
+        shown.append(f", kept by {content.kept_by}")
+    return shown

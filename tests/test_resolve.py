@@ -99,7 +99,7 @@ def test_the_worked_example_plans_its_three_results_at_their_places(worked: Path
     its command as it runs."""
     analysis = api.resolve(worked)
     assert [
-        (r.id, r.output, r.universe, [(p.address, p.record_path, p.bytes_path) for p in r.places])
+        (r.id, r.output, r.universe, [(p.address, p.record_path, p.file_path) for p in r.places])
         for r in analysis.results
     ] == [
         (
@@ -191,7 +191,7 @@ def test_the_worked_examples_commands_fill_in_with_what_each_result_reads(worked
 
 def test_each_result_has_its_places_and_its_command_filled_in(worked: Path) -> None:
     shown = [
-        (r.places[0].address, r.places[0].record_path, r.places[0].bytes_path, r.command)
+        (r.places[0].address, r.places[0].record_path, r.places[0].file_path, r.command)
         for r in api.resolve(worked).results
     ]
     assert shown == [
@@ -252,7 +252,7 @@ def test_iris_pipeline_plans_with_its_results_names_and_owners(tmp_path: Path) -
     assert each_after_what_it_reads(analysis)
     found = by_id(analysis)
     features = found["feature_extraction.features#mlp_svm"]
-    assert (features.output, runs_in(analysis, features), features.places[0].bytes_path) == (
+    assert (features.output, runs_in(analysis, features), features.places[0].file_path) == (
         "feature_extraction.outputs.features",
         "feature_extraction",
         "results/mlp_svm/feature_extraction.features.npy",
@@ -371,7 +371,7 @@ def test_output5s_three_pins_read_three_results_each_in_its_owners_folder(pinnin
         "subanalysis",
         "subanalysis",
     ]
-    assert [result.places[0].bytes_path for result in reads] == [
+    assert [result.places[0].file_path for result in reads] == [
         "results/u1/subanalysis.output1.json",
         "subanalysis/results/u1/output1.json",
         "subanalysis/results/v1/output1.json",
@@ -536,7 +536,7 @@ def test_the_models_paths_are_from_the_driving_analysiss_folder(pinning: Path) -
         [("output1#u1", "output1#v1")],
     )
     assert [
-        (r.id, r.places[0].record_path, r.places[0].bytes_path, r.command) for r in analysis.results
+        (r.id, r.places[0].record_path, r.places[0].file_path, r.command) for r in analysis.results
     ] == [
         (
             "output1#u1",
@@ -726,7 +726,7 @@ def test_a_result_reached_through_two_chains_has_a_place_for_each_name(tmp_path:
     analysis = api.resolve(top)
     found = by_id(analysis)
     inner = found["inner.output1#u1"]
-    assert [(place.address, place.record_path, place.bytes_path) for place in inner.places] == [
+    assert [(place.address, place.record_path, place.file_path) for place in inner.places] == [
         (
             "inner.output1#u1",
             ".astra/records/u1/inner.output1.json",
@@ -958,7 +958,7 @@ def test_only_a_result_built_from_the_working_tree_alone_has_a_command(tmp_path:
         api.Source("lib.once", result="lib:once"),
     )
     assert {
-        id_: (found[id_].places[0].record_path, found[id_].places[0].bytes_path)
+        id_: (found[id_].places[0].record_path, found[id_].places[0].file_path)
         for id_ in ("lib.out#u1", "lib:out#v1", "lib:once")
     } == {
         "lib.out#u1": (".astra/records/u1/lib.out.json", "results/u1/lib.out.json"),
@@ -1617,7 +1617,7 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
                 {
                     "address": "output1#u1",
                     "record_path": ".astra/records/u1/output1.json",
-                    "bytes_path": "results/u1/output1.json",
+                    "file_path": "results/u1/output1.json",
                 }
             ],
             "universe": "universes.u1",
@@ -1631,7 +1631,7 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
                 {
                     "address": "output2",
                     "record_path": ".astra/records/output2.json",
-                    "bytes_path": "results/output2.tar.gz",
+                    "file_path": "results/output2.tar.gz",
                 }
             ],
             "inputs": [],

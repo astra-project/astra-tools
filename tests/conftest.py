@@ -143,8 +143,8 @@ def build(
             continue
         data = made(result)
         for place in result.places:
-            (root / place.bytes_path).parent.mkdir(parents=True, exist_ok=True)
-            (root / place.bytes_path).write_bytes(data)
+            (root / place.file_path).parent.mkdir(parents=True, exist_ok=True)
+            (root / place.file_path).write_bytes(data)
         read_ = []
         for source in result.inputs:
             found: Digest
@@ -154,7 +154,7 @@ def build(
                 upstream = results[source.result or ""]
                 at = owner(analysis, upstream).commit
                 if at is None:
-                    found = digest_file(root / upstream.places[0].bytes_path)
+                    found = digest_file(root / upstream.places[0].file_path)
                 else:
                     remotes = Remotes()
                     history = History(read(root, remotes), remotes)
@@ -172,9 +172,9 @@ def remake(top: Path, id_: str, data: bytes, environment: api.Environment = ENVI
     `environment`."""
     analysis = api.resolve(top)
     paths = {each.ref: each.path for found in analysis.analyses for each in found.inputs}
-    paths |= {result.id: result.places[0].bytes_path for result in analysis.results}
+    paths |= {result.id: result.places[0].file_path for result in analysis.results}
     (result,) = [result for result in analysis.results if result.id == id_]
-    (top / result.places[0].bytes_path).write_bytes(data)
+    (top / result.places[0].file_path).write_bytes(data)
     found = [
         (source.entry, digest_file(top / paths[source.input or source.result or ""]))
         for source in result.inputs

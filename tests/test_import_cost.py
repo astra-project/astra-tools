@@ -60,6 +60,7 @@ ALLOWED = {
     "astra._internal.papers.verified": (),
     "astra._internal.results": (),
     "astra._internal.results.status": ("ruamel.yaml",),
+    "astra._internal.results.content": (),
     "astra._internal.results.hashing": (),
     "astra._internal.results.history": ("ruamel.yaml",),
     "astra._internal.results.records": ("ruamel.yaml",),

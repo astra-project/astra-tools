@@ -522,7 +522,10 @@ UNCHANGED = {
 
 def statuses(report: api.StatusReport) -> dict[str, tuple[str, str | None]]:
     """Each result's id, and its record's and bytes' statuses."""
-    return {id_: (status.state, status.bytes) for id_, status in report.statuses.items()}
+    return {
+        id_: (status.state, status.bytes.state if status.bytes else None)
+        for id_, status in report.statuses.items()
+    }
 
 
 def broken(report: api.StatusReport, id_: str) -> list[tuple[str, str]]:

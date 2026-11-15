@@ -277,9 +277,15 @@ fit#baseline  missing  absent  .astra/records/baseline/fit.json
 1 result(s), 0 unchanged, 0 stale, 1 missing; 1 absent
 ```
 
-An input whose content is kept outside git, behind a stand-in, is compared by the hash the
-stand-in gives. astra-tools recognises Git LFS pointers, git-annex links and DVC files, and
-fetches none of them.
+Each result's bytes, and each input's, come with the tool that keeps them where a stand-in is
+at the file's path: `absent, kept by git-annex` says the content isn't in this clone, and which
+tool fetches it. An input whose content isn't here is listed after the results. Bytes that
+aren't fetched don't change a result's state or the exit code, and `astra` fetches nothing.
+
+git-annex links, with keys of a SHA-256 backend, and Git LFS pointers are compared by the hash
+they give, without the content. A DVC file gives no SHA-256: an input kept by DVC must be
+pulled for the results made from it to read `unchanged`
+([Data model](data-model.md#bytes)).
 
 ## `astra history`
 

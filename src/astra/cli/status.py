@@ -17,10 +17,15 @@ def command(path: Path | None, as_json: bool) -> None:
 
     PATH is the analysis's folder, the current one by default. Each result is shown with its
     record's status, unchanged, stale or missing, and its bytes', present or absent, and why;
-    then each evidence with the status of what it cites. The records and bytes are those in the
-    working tree. With --json, the report is printed as `astra.api.status` gives it. Exits 0
-    when every result and evidence is unchanged, 1 when one isn't or the analysis breaks a
-    MUST, which is shown as `astra validate` shows it, and 2 where it can't be read.
+    then each evidence with the status of what it cites, and each input whose content isn't
+    here. The records and bytes are those in the working tree.
+
+    Bytes a large-file tool keeps are shown with the tool. Nothing is fetched, and bytes that
+    aren't fetched change no status.
+
+    With --json, the report is printed as `astra.api.status` gives it. Exits 0 when every
+    result and evidence is unchanged, 1 when one isn't or the analysis breaks a MUST, which is
+    shown as `astra validate` shows it, and 2 where it can't be read.
     """
     from astra import api
     from astra._internal.analysis.resolve import read

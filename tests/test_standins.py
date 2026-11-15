@@ -10,7 +10,8 @@ import pytest
 
 from astra import api
 from astra._internal.sources.git import Repository
-from astra._internal.sources.reader import WorktreeReader
+from astra._internal.sources.reader import CommitReader, WorktreeReader
+from astra._internal.sources.remote import Remotes
 from astra._internal.sources.standins import BUILT_IN, Dvc, GitAnnex, GitLfs, registered
 from tests.conftest import MINIMAL, repository
 
@@ -78,6 +79,38 @@ def test_each_gives_the_hash_and_size_of_what_it_stands_for_where_it_can(
     assert Dvc().gives(tree, "huge.csv") is None
 
 
+def test_each_says_where_the_content_is_in_this_clone(tmp_path: Path) -> None:
+    """A git-annex link leads to the content once it is fetched, and DVC puts it at the path
+    beside its file. A pointer file is there only while the content isn't. At a commit, whether
+    the tool's store holds the content is the tool's to say."""
+    files = {
+        "lfs.bin": LFS_POINTER,
+        "unlocked.bin": f"/annex/objects/{ANNEXED}\n",
+        "huge.csv.dvc": DVC_FILE.format("huge.csv"),
+    }
+    top = repository(tmp_path, files)
+    store = top / ".git" / "annex" / "objects" / "Jx" / "3M" / ANNEXED
+    (top / "locked.bin").symlink_to(store.relative_to(top) / ANNEXED)
+    repository(top, {})
+    reader = WorktreeReader(top, Repository(top))
+    assert GitLfs().content(reader, "lfs.bin") is None
+    assert GitAnnex().content(reader, "unlocked.bin") is None
+    assert GitAnnex().content(reader, "locked.bin") is None
+    assert Dvc().content(reader, "huge.csv") is None
+
+    store.mkdir(parents=True)
+    (store / ANNEXED).write_bytes(b"binary")
+    (top / "huge.csv").write_text("a,b\n")
+    reader = WorktreeReader(top, Repository(top))
+    assert GitAnnex().content(reader, "locked.bin") == store / ANNEXED
+    assert Dvc().content(reader, "huge.csv") == top / "huge.csv"
+    head = Repository(top).head()
+    assert head is not None
+    at_commit = CommitReader(Repository(top), head, None, Remotes())
+    assert GitAnnex().recognises(at_commit, "locked.bin")
+    assert GitAnnex().content(at_commit, "locked.bin") is None
+
+
 PLUGIN = """\
 from dataclasses import dataclass
 
@@ -94,6 +127,9 @@ class Store:
         return entry is not None and entry.kind == "symlink" and entry.target.startswith("store/")
 
     def gives(self, reader, path):
+        return None
+
+    def content(self, reader, path):
         return None
 
 

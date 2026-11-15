@@ -169,5 +169,5 @@ def test_the_runner_of_the_api_reference_builds_and_records(example: Path) -> No
         [sys.executable, "-c", runner], cwd=example, env={**os.environ, "PATH": path}, check=True
     )
     status = api.status(example).statuses["fit#baseline"]
-    assert (status.state, status.bytes) == ("unchanged", "present")
+    assert (status.state, status.bytes) == ("unchanged", api.Bytes("present"))
     assert status.record is not None and status.record.generated_by.runner.id == "example-runner"

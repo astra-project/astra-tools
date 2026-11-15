@@ -28,7 +28,7 @@ src/astra/            # NO __init__.py (namespace package)
     documents/        a file as a document: load, contract, catalogue, document, grammar,
                       scaffold, spec_render
     analysis/         the stack and what it means: stack, universes, rules/, validate, resolve
-    results/          records, hashing, status, history (the `astra history` command's)
+    results/          records, hashing, content (where a file's bytes are), status, history
     papers/           the paper cache, downloads, PDF text and quotes; library is what api offers
 docs/                 the CLI, API and data-model reference, for Zensical (zensical.toml)
 ```
@@ -42,6 +42,7 @@ docs/                 the CLI, API and data-model reference, for Zensical (zensi
 5. **`astra.api` is the public surface**: `validate`, `resolve`, `status`, `init_analysis`, `write_records`, the paper functions (`paper`, `add_paper`, `verify_quote`), and every class of the data model and error. A tool built on astra-tools imports from there and nowhere else, types included. Add what such a tool needs there, rather than have it reach into `_internal`. Offer a function and plain data, never a class of `_internal`.
 6. **The data model is plain data, defined in `model/` and nowhere else**: frozen dataclasses with no methods beyond `to_json`, holding only what JSON holds. Each file of `model/` defines what one function returns, and no logic. A reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`), never an object; the resolved analysis holds what the specification's rules give, not what they start from (no switch, no `derived_from`, no template), and each fact once. `Stack`, `Element`, `Identity`, `Planned` and `Context` are how astra-tools works it out, and stay inside. A report holds its own answer and no other's: a `StatusReport` has no analysis in it, as `resolve` gives that, and each gives `head`, the commit read, for a runner to tell the two agree. One thing has one model and one JSON form (`model.to_json`): where a command shows what a function of `astra.api` returns, its `--json` prints that, never a shape of its own.
 7. **Only a valid analysis resolves**: `resolve` and `status` raise `InvalidAnalysisError` with the validator's report otherwise, so nothing downstream of them handles an undetermined field.
+8. **A file an analysis names is read one way**: an input's file and a result's bytes are each the content, a stand-in for it (git-annex, Git LFS, DVC; `sources/standins.py`), or nothing. `results/content.look` says which, for the validator's and the checker's every use. astra-tools never fetches, asks no tool and no remote: it says the bytes are `absent` and which tool keeps them (`Bytes`), and a runner fetches. A result's state never depends on its own bytes.
 
 ## Development Commands
 

@@ -108,6 +108,12 @@ The status report holds none of the analysis. `resolve` and `status` each give `
 commit the repository was on, so a runner that asks for both can tell that nothing was committed
 between the two.
 
+The status report also says where the bytes of each result and each input are: `present`, or
+`absent` and which large-file tool keeps them. astra-tools never fetches them: that is a
+runner's to do. git-annex and Git LFS are read without their content, so a clone that has
+fetched nothing validates and reads as up to date. An input kept by DVC must be pulled for the
+results made from it to be compared, as DVC gives an MD5 and a record a SHA-256.
+
 The paper functions are apart from the rest: the paper cache is a folder of this machine,
 `add_paper` uses the network, and matching a quote against a PDF's text is astra-tools' own, as
 the specification has no rule on it.

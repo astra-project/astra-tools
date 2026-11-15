@@ -76,7 +76,7 @@ analysis resolves. The error's `report` is the validator's report.
 ```python
 analysis = api.resolve("my-analysis")
 for result in analysis.results:
-    print(result.id, result.places[0].bytes_path, result.command)
+    print(result.id, result.places[0].file_path, result.command)
 ```
 
 ## `status`
@@ -93,6 +93,20 @@ A result's status says whether its record still holds: whether anything the resu
 from has changed since the commit the record names. This is what the specification calls
 checking, and its [check rules](https://astra-spec.org/0.1/specification/#rules) are the ones
 a status reports.
+
+The report also says where the [bytes](data-model.md#bytes) of each result and of each input
+are, and which large-file tool keeps them. A result's state doesn't depend on its bytes: a
+clone that hasn't fetched them reads as up to date. astra-tools never fetches, so a runner
+reads what needs it:
+
+```python
+for ref, content in report.inputs.items():
+    if content.state == "absent":
+        print(f"{ref} needs fetching with {content.kept_by}")
+```
+
+git-annex and Git LFS are read without their content. An input kept by DVC must be pulled for
+the results made from it to be compared ([why](data-model.md#bytes)).
 
 The report holds none of the analysis: `resolve` gives that. Raises
 [`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`.
@@ -276,7 +290,7 @@ for result in analysis.results:  # each comes after every result it reads
         if source.input is not None:
             path = inputs[source.input].path
         else:
-            path = results[source.result].places[0].bytes_path
+            path = results[source.result].places[0].file_path
         read.append(api.RecordedInput(source.entry, *digest(folder / path)))
     # The recipe runs in the folder of the analysis its output belongs to.
     owner = analyses[".".join(result.output.split(".")[:-2])]
@@ -290,7 +304,7 @@ for result in analysis.results:  # each comes after every result it reads
         started=started,
         finished=now(),
     )
-    api.write_records(folder, result, *digest(folder / result.places[0].bytes_path), generation)
+    api.write_records(folder, result, *digest(folder / result.places[0].file_path), generation)
 ```
 
 After it, `astra status` reads the record back:

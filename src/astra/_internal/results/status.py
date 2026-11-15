@@ -14,8 +14,10 @@ A checker reads records only through planned results, which the resolved analysi
   for each switch an entry reads through, that is the decision it switches on, the option
   selected for it where it is read and the case it takes, whatever bytes result (Results *made
   from*); otherwise it is `unchanged`;
-- its bytes are `present` where those at the default place hash to the record's, and `absent`
-  otherwise: `ABSENT_RESULT` where it has a valid record.
+- its bytes are `present` where reading its default place gives the record's, through a
+  stand-in's link too (`content.look`), and `absent` otherwise. `ABSENT_RESULT` is for bytes
+  that are neither there nor stood in for there, where it has a valid record: a stand-in for
+  the recorded bytes, such as a large-file pointer that isn't fetched, breaks nothing.
 
 A result has one status, the worst of its places'. What is wrong with the result itself is in
 `Status.why`, a diagnostic for each rule it breaks; that it reads a result that isn't unchanged,
@@ -29,7 +31,7 @@ A result of an analysis from a commit is read through its record at the declared
 analysis it belongs to, and the hashes of the results it reads are taken from their records;
 only one that a planned result reads gets a bytes status. Evidence gets the status of the
 results it cites (`STALE_EVIDENCE`): the root's, and each item of a declared analysis's evidence
-that cites a planned result.
+that cites a planned result. Each input's bytes are reported as a result's are, by its ref.
 """
 
 from __future__ import annotations
@@ -40,11 +42,12 @@ from dataclasses import dataclass
 
 from astra._internal.analysis.resolve import Resolved, input_path, reads, selected
 from astra._internal.analysis.rules.context import Context
-from astra._internal.analysis.stack import Element, Member, bind
+from astra._internal.analysis.stack import Element, Identity, Member, bind
 from astra._internal.analysis.universes import Place, Planned, Selection, Step, Through, places
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.documents.contract import Contract
 from astra._internal.results import hashing
+from astra._internal.results.content import Content, look
 from astra._internal.results.records import read_record
 from astra._internal.sources import standins
 from astra._internal.sources.git import Repository
@@ -90,15 +93,19 @@ def status(resolved: Resolved, remotes: Remotes | None = None) -> StatusReport:
                 for place in places(context.stack, planned)
             ]
         )
-    return StatusReport(analysis.head, statuses, tuple(_evidence(resolved, statuses)))
+    return StatusReport(
+        analysis.head, statuses, tuple(_evidence(resolved, statuses)), checker.inputs(resolved)
+    )
 
 
 def _worst_of(each: list[Status]) -> Status:
-    """A result's status, from its status at each of its places."""
-    absent = any(status.bytes == "absent" for status in each)
+    """A result's status, from its status at each of its places: its bytes are those of the
+    first place that lacks them, where one does."""
+    held = [status.bytes for status in each if status.bytes is not None]
+    absent = [found for found in held if found.state == "absent"]
     return Status(
         _worst(status.state for status in each),
-        None if each[0].bytes is None else "absent" if absent else "present",
+        next(iter(absent or held), None),
         each[0].record if all(status.record is not None for status in each) else None,
         tuple(diagnostic for status in each for diagnostic in status.why),
         tuple(dict.fromkeys(entry for status in each for entry in status.stale_inputs)),
@@ -346,7 +353,7 @@ class _Checker:
             )
             if source.result is None:
                 path = input_path(self.stack, through.target)
-                found = self._content(through.target, path)
+                found = self._look(through.target.analysis, path).digest()
                 if found is None:  # stale, since it can't be compared
                     changes.append(
                         f"the content of `{source.entry}` can't be read at {path}: no file is "
@@ -363,33 +370,49 @@ class _Checker:
                 stale.append(source.entry)
         return changes, stale
 
-    def _content(self, input_: Element, path: str) -> hashing.Digest | None:
-        """The hash and size of `input_`, whose file is at `path`: of the file or, where a
-        stand-in is at its path, what the stand-in gives of it, never the stand-in's own; None
-        where neither is there, as where a stand-in beside its path gives no SHA-256."""
-        reader = self.stack.analyses[input_.analysis].reader
-        for standin in self.standins:
-            if standin.place(path) == path and standin.recognises(reader, path):
-                given = standin.gives(reader, path)
-                return None if given is None else hashing.Digest(*given)
-        return hashing.digest(reader, path)
+    def _look(self, analysis: Identity, path: str) -> Content:
+        """What is at `path`, a file of `analysis`: an input's, or a result's bytes."""
+        return look(self.stack.analyses[analysis].reader, path, self.standins)
+
+    def inputs(self, resolved: Resolved) -> dict[str, Bytes]:
+        """Where the content of each input of the resolved analysis is, by the input's ref."""
+        found: dict[str, Bytes] = {}
+        identities = sorted(resolved.keys, key=resolved.keys.__getitem__)
+        for analysis, identity in zip(resolved.analysis.analyses, identities, strict=True):
+            for input_ in analysis.inputs:
+                element = Element(identity, "input", input_.ref.rpartition(".")[2])
+                content = self._look(identity, input_path(self.stack, element))
+                found[input_.ref] = Bytes("present" if content.here else "absent", content.kept_by)
+        return found
 
     def _bytes(
         self, member: Member, place: Place, record: ProvenanceRecord | None
     ) -> tuple[Bytes, tuple[Diagnostic, ...]]:
-        """The bytes' status at `place`, against `record`, the result's record there or None
-        where it has none, and `ABSENT_RESULT` where they are absent and it has one."""
+        """Where the bytes are at `place`, against `record`, the result's record there or None
+        where it has none, and `ABSENT_RESULT` where neither they nor a stand-in for them is
+        there and it has one."""
+        found = self._look(member.identity, place.bytes)
         if record is None:  # no recorded bytes, so absent, but no ABSENT_RESULT
-            return "absent", ()
-        found = hashing.digest(member.reader, place.bytes)
-        if found is not None and found == _digest(record):
-            return "present", ()
-        if found is None:
-            message = f"no file is at {place.bytes}, the result's default place"
-        else:
+            return Bytes("absent", found.kept_by), ()
+        digest = found.digest()
+        if digest == _digest(record):
+            return Bytes("present" if found.here else "absent", found.kept_by), ()
+        if digest is None and found.standin is not None:
+            # A stand-in that gives no hash is taken to stand for the recorded bytes.
+            return Bytes("absent", found.kept_by), ()
+        if found.here:
             message = f"the bytes at {place.bytes} aren't the ones its record gives"
+        elif found.standin is not None:
+            message = (
+                f"the {found.standin.name} stand-in at {place.bytes} is for other bytes than "
+                "the ones its record gives"
+            )
+        else:
+            message = f"no file is at {place.bytes}, the result's default place"
         at = _location(member, place.bytes)
-        return "absent", (self.catalogue.diagnostic("ABSENT_RESULT", message, at),)
+        return Bytes("absent", found.kept_by), (
+            self.catalogue.diagnostic("ABSENT_RESULT", message, at),
+        )
 
 
 def _switched(

@@ -13,6 +13,11 @@ A stand-in isn't the content, but it can give the content's hash and size, which
 compares: a Git LFS pointer gives both, a git-annex link both for a key of its `SHA256` and
 `SHA256E` backends, and a DVC file no SHA-256.
 
+It can also say where the content is in this clone, where it is: a git-annex link leads to it
+once it is fetched, and DVC puts it at the path beside its file. A pointer file, of Git LFS or
+of git-annex, is there only while the content isn't, as the tool puts the content in its place.
+Nothing here asks a tool, or a remote, whether it has the content: fetching is a runner's.
+
 They are an extension point: another package adds one by registering an object
 that has `StandIn`'s members in the entry-point group `astra.standins`.
 """
@@ -21,9 +26,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
-from astra._internal.sources.reader import Reader
+from astra._internal.sources.reader import Reader, WorktreeReader
 
 GROUP = "astra.standins"
 """The entry-point group other packages register their stand-ins in."""
@@ -48,6 +54,12 @@ class StandIn(Protocol):
     def gives(self, reader: Reader, path: str) -> tuple[str, int] | None:
         """The hash (`sha256:` and the digest) and the size of the file that what is at
         `place(path)`, which it recognises, stands in for; None where it doesn't give both."""
+        ...
+
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """The file that holds, in this clone, the content that what is at `place(path)`, which
+        it recognises, stands in for; None where the content isn't here, or `reader` reads a
+        commit, whose store is the tool's to read."""
         ...
 
 
@@ -85,6 +97,9 @@ class GitLfs:
             return None
         return oid, int(size)
 
+    def content(self, reader: Reader, path: str) -> Path | None:
+        return None  # a pointer is at the path only while the content isn't
+
 
 @dataclass(frozen=True)
 class GitAnnex:
@@ -104,6 +119,15 @@ class GitAnnex:
         key = self._key(reader, path)
         found = None if key is None else _ANNEX_SHA256.match(key.rpartition("/")[2])
         return None if found is None else (f"sha256:{found[2]}", int(found[1]))
+
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """What a link leads to, once fetched; a pointer file is there only while the content
+        isn't."""
+        entry = reader.stat(path)
+        if not isinstance(reader, WorktreeReader) or entry is None or entry.target is None:
+            return None
+        target = (reader.top / path).parent / entry.target
+        return target if target.is_file() else None
 
     def _key(self, reader: Reader, path: str) -> str | None:
         """The path into `annex/objects/` that the link at `path` names, if it is one."""
@@ -133,6 +157,11 @@ class Dvc:
 
     def gives(self, reader: Reader, path: str) -> tuple[str, int] | None:
         return None  # a DVC file gives an MD5, not a SHA-256
+
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """The file at the path itself, which DVC writes or links from its cache."""
+        file = reader.top / path if isinstance(reader, WorktreeReader) else None
+        return file if file is not None and file.is_file() else None
 
 
 BUILT_IN: tuple[StandIn, ...] = (GitLfs(), GitAnnex(), Dvc())

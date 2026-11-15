@@ -12,7 +12,9 @@ records committed, gives the effects it lists.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -50,7 +52,10 @@ def astra(*args: str) -> Result:
 
 def statuses(report: StatusReport) -> dict[str, tuple[str, str | None]]:
     """Each result's id, and its record's and bytes' statuses."""
-    return {id_: (status.state, status.bytes) for id_, status in report.statuses.items()}
+    return {
+        id_: (status.state, status.bytes.state if status.bytes else None)
+        for id_, status in report.statuses.items()
+    }
 
 
 def codes(report: StatusReport, id_: str) -> list[str]:
@@ -197,7 +202,7 @@ def test_an_invalid_record_fixture_leaves_its_result_missing(worked: Path, fixtu
     MISPLACED_RECORD or MISSING_RECORD_INPUTS, nor its bytes by ABSENT_RESULT."""
     shutil.copy(fixture, worked / ".astra" / "records" / "output2.json")
     found = api.status(worked).statuses["output2"]
-    assert (found.state, found.bytes, found.record) == ("missing", "absent", None)
+    assert (found.state, found.bytes, found.record) == ("missing", api.Bytes("absent"), None)
     assert {(broken.code, broken.level) for broken in found.why} == {("INVALID_RECORD", "error")}
     assert all(broken.message.endswith(f" ({header(fixture)})") for broken in found.why)
     assert all(broken.location.file == ".astra/records/output2.json" for broken in found.why)
@@ -392,7 +397,7 @@ def test_a_result_made_again_with_other_bytes_makes_its_readers_stale(worked: Pa
     report = api.status(worked)
     assert statuses(report)["output1#u1"] == ("unchanged", "present")
     compared = report.statuses["output2"]
-    assert (compared.state, compared.bytes, compared.why) == ("stale", "present", ())
+    assert (compared.state, compared.bytes, compared.why) == ("stale", api.Bytes("present"), ())
     assert compared.stale_inputs == ("output1#u1",)
     assert recorded(compared)["output1#u1"] == digest_bytes(b"output1#u1\n")
     remade = report.statuses["output1#u1"].record
@@ -591,11 +596,11 @@ def test_a_result_with_two_names_has_the_worst_status_of_its_places(pair: Path) 
     default place; and its record, the first place's, only where every place holds one that is
     the result's. Whatever reads it reads a result that isn't unchanged, by whichever name."""
     whole = api.status(pair).statuses["inner.output1#u1"]
-    assert (whole.state, whole.bytes, whole.why) == ("unchanged", "present", ())
+    assert (whole.state, whole.bytes, whole.why) == ("unchanged", api.Bytes("present"), ())
     assert whole.record is not None and whole.record.address == "inner.output1#u1"
     (pair / "results" / "u1" / "stage.inner.output1.json").unlink()
     absent = api.status(pair).statuses["inner.output1#u1"]
-    assert (absent.state, absent.bytes) == ("unchanged", "absent")
+    assert (absent.state, absent.bytes) == ("unchanged", api.Bytes("absent"))
     assert [(d.code, d.location.file) for d in absent.why] == [
         ("ABSENT_RESULT", "results/u1/stage.inner.output1.json")
     ]
@@ -603,7 +608,7 @@ def test_a_result_with_two_names_has_the_worst_status_of_its_places(pair: Path) 
     (pair / ".astra" / "records" / "u1" / "stage.inner.output1.json").unlink()
     report = api.status(pair)
     missing = report.statuses["inner.output1#u1"]
-    assert (missing.state, missing.bytes, missing.record) == ("missing", "absent", None)
+    assert (missing.state, missing.bytes, missing.record) == ("missing", api.Bytes("absent"), None)
     assert [(d.code, d.location.file) for d in missing.why] == [
         ("MISSING_RECORD", ".astra/records/u1/stage.inner.output1.json")
     ]
@@ -910,6 +915,165 @@ def test_an_analysis_that_breaks_a_must_isnt_checked(
     assert [d.code for d in report.diagnostics if d.level == "error"] == broken
 
 
+# --- Bytes that a large-file tool keeps: a stand-in at the file's path ---
+
+
+def annexed(top: Path, path: str, *, fetched: bool, backend: str = "SHA256E") -> None:
+    """Put at `path` the link git-annex keeps in a locked file's place, with the file's content
+    in the object store or, not `fetched`, nowhere."""
+    file = top / path
+    data = file.read_bytes()
+    hashed = hashlib.sha256(data) if backend.startswith("SHA256") else hashlib.md5(data)
+    key = f"{backend}-s{len(data)}--{hashed.hexdigest()}{file.suffix}"
+    store = top / ".git" / "annex" / "objects" / "Jx" / "3M" / key
+    file.unlink()
+    file.symlink_to(os.path.relpath(store / key, file.parent))
+    if fetched:
+        store.mkdir(parents=True)
+        (store / key).write_bytes(data)
+
+
+def pointed(top: Path, path: str, tool: str) -> None:
+    """Put at `path` the pointer file a tool keeps there while the file's content isn't: an
+    unlocked git-annex file's, or Git LFS's."""
+    file = top / path
+    data = file.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if tool == "git-annex":
+        file.write_text(f"/annex/objects/SHA256E-s{len(data)}--{digest}{file.suffix}\n")
+    else:
+        lines = ("version https://git-lfs.github.com/spec/v1", f"oid sha256:{digest}")
+        file.write_text("\n".join((*lines, f"size {len(data)}", "")))
+
+
+def dvc(top: Path, path: str) -> None:
+    """Put beside `path` the file DVC keeps for it, tracked: it gives an MD5, and no SHA-256."""
+    file = top / path
+    md5 = hashlib.md5(file.read_bytes()).hexdigest()
+    text = f"outs:\n- md5: {md5}\n  size: {file.stat().st_size}\n  path: {file.name}\n"
+    (top / f"{path}.dvc").write_text(text)
+    git(top, "add", f"{path}.dvc")
+
+
+NOT_FETCHED: dict[str, Callable[[Path, str], None]] = {
+    "git-annex, locked": lambda top, path: annexed(top, path, fetched=False),
+    "git-annex, unlocked": lambda top, path: pointed(top, path, "git-annex"),
+    "Git LFS": lambda top, path: pointed(top, path, "Git LFS"),
+}
+"""A file's content left out of the clone, as each tool that gives its SHA-256 leaves it."""
+
+
+def test_a_result_kept_by_git_annex_is_present_through_its_link(worked: Path) -> None:
+    """A locked git-annex file is a link into the object store: once fetched, reading the
+    result's file gives its recorded bytes, so they are present."""
+    annexed(worked, "results/u1/output1.json", fetched=True)
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    status = report.statuses["output1#u1"]
+    assert (status.bytes, status.why) == (api.Bytes("present", "git-annex"), ())
+
+
+@pytest.mark.parametrize("kept", sorted(NOT_FETCHED))
+def test_a_result_that_isnt_fetched_is_unchanged_with_its_bytes_absent(
+    worked: Path, kept: str
+) -> None:
+    """A stand-in for the recorded bytes is at the result's file, and the bytes aren't in this
+    clone: the result is up to date, as is what reads it, and no rule is broken. Its bytes say
+    which tool keeps them, for a runner to fetch them."""
+    NOT_FETCHED[kept](worked, "results/u1/output1.json")
+    report = api.status(worked)
+    assert statuses(report) == {**UNCHANGED, "output1#u1": ("unchanged", "absent")}
+    status = report.statuses["output1#u1"]
+    assert (status.bytes, status.why) == (api.Bytes("absent", kept.partition(",")[0]), ())
+    shown = astra("status", str(worked))
+    assert shown.exit_code == 0
+    assert f"output1#u1  unchanged  absent, kept by {kept.partition(',')[0]}  " in shown.stdout
+    assert "ABSENT_RESULT" not in shown.stdout
+
+
+def test_a_stand_in_for_other_bytes_than_the_recorded_ones_breaks_absent_result(
+    worked: Path,
+) -> None:
+    (worked / "results" / "u1" / "output1.json").write_text("other bytes")
+    pointed(worked, "results/u1/output1.json", "Git LFS")
+    status = api.status(worked).statuses["output1#u1"]
+    assert (status.state, status.bytes) == ("unchanged", api.Bytes("absent", "Git LFS"))
+    (broken,) = status.why
+    assert (broken.code, broken.level) == ("ABSENT_RESULT", "warning")
+    assert "the Git LFS stand-in at results/u1/output1.json is for other bytes" in broken.message
+
+
+def test_a_result_kept_by_dvc_is_present_once_fetched_and_absent_before(worked: Path) -> None:
+    """DVC keeps a file beside the result's, which gives no SHA-256: with the bytes at the
+    result's file they are compared with the record's; without them, the DVC file is taken to
+    stand for them."""
+    dvc(worked, "results/u1/output1.json")
+    status = api.status(worked).statuses["output1#u1"]
+    assert (status.state, status.bytes, status.why) == (
+        "unchanged",
+        api.Bytes("present", "DVC"),
+        (),
+    )
+    (worked / "results" / "u1" / "output1.json").unlink()
+    report = api.status(worked)
+    assert statuses(report) == {**UNCHANGED, "output1#u1": ("unchanged", "absent")}
+    status = report.statuses["output1#u1"]
+    assert (status.bytes, status.why) == (api.Bytes("absent", "DVC"), ())
+
+
+def test_each_inputs_bytes_are_in_the_report(worked: Path) -> None:
+    """By the input's ref: present where reading its file gives its content, through a
+    git-annex link too."""
+    assert api.status(worked).inputs == {"inputs.input1": api.Bytes("present")}
+    annexed(worked, "data/input1.csv", fetched=True)
+    report = api.status(worked)
+    assert report.inputs == {"inputs.input1": api.Bytes("present", "git-annex")}
+    assert statuses(report) == UNCHANGED
+
+
+@pytest.mark.parametrize("kept", sorted(NOT_FETCHED))
+def test_an_input_that_isnt_fetched_leaves_its_results_unchanged(worked: Path, kept: str) -> None:
+    """Its stand-in gives its content's SHA-256, which is compared with what each record says
+    was read: the analysis is valid and up to date with none of the input's content here."""
+    NOT_FETCHED[kept](worked, "data/input1.csv")
+    assert api.validate(worked).valid
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    assert report.inputs == {"inputs.input1": api.Bytes("absent", kept.partition(",")[0])}
+    shown = astra("status", str(worked))
+    assert shown.exit_code == 0
+    assert f"inputs.input1  absent, kept by {kept.partition(',')[0]}\n" in shown.stdout
+
+
+def test_an_input_kept_by_dvc_is_compared_only_once_fetched(worked: Path) -> None:
+    """A DVC file gives an MD5, which a record's SHA-256 can't be compared with: with the
+    content at the input's path the results are unchanged, and without it they are stale."""
+    dvc(worked, "data/input1.csv")
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    assert report.inputs == {"inputs.input1": api.Bytes("present", "DVC")}
+    (worked / "data" / "input1.csv").unlink()
+    assert api.validate(worked).valid
+    report = api.status(worked)
+    assert report.inputs == {"inputs.input1": api.Bytes("absent", "DVC")}
+    assert {state for state, _ in statuses(report).values()} == {"stale"}
+    (message,) = messages(report, "output1#u1")
+    assert "only a stand-in that gives no SHA-256" in message
+
+
+def test_a_git_annex_key_that_gives_no_sha256_is_compared_once_fetched(worked: Path) -> None:
+    """A key of another backend than SHA-256 says nothing a record can be compared with: the
+    content is hashed where the link leads to it, and can't be told where it doesn't."""
+    annexed(worked, "data/input1.csv", fetched=True, backend="MD5E")
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    assert report.inputs == {"inputs.input1": api.Bytes("present", "git-annex")}
+    shutil.rmtree(worked / ".git" / "annex")
+    report = api.status(worked)
+    assert report.inputs == {"inputs.input1": api.Bytes("absent", "git-annex")}
+    assert statuses(report)["output1#u1"] == ("stale", "present")
+
+
 # --- The report as JSON ---
 
 
@@ -921,14 +1085,14 @@ def test_the_report_as_json_holds_each_status_by_result_id(worked: Path) -> None
     report = api.status(worked)
     shape = report.to_json()
     assert json.loads(json.dumps(shape)) == shape
-    assert list(shape) == ["head", "statuses", "evidence"]
+    assert list(shape) == ["head", "statuses", "evidence", "inputs"]
     assert shape["head"] == git(worked, "rev-parse", "HEAD").strip()
     assert list(shape["statuses"]) == ["output1#u1", "output1#u2", "output2"]
     record = json.loads((worked / ".astra" / "records" / "output2.json").read_text("utf-8"))
     assert record["generated_by"]["environment"] == {"iri": ENVIRONMENT.iri}
     assert shape["statuses"]["output2"] == {
         "state": "unchanged",
-        "bytes": "absent",
+        "bytes": {"state": "absent"},
         "record": record,
         "why": [
             {
@@ -944,6 +1108,7 @@ def test_the_report_as_json_holds_each_status_by_result_id(worked: Path) -> None
     assert shape["evidence"] == [
         {"insight": "findings.insight1", "index": 0, "state": "unchanged", "why": []}
     ]
+    assert shape["inputs"] == {"inputs.input1": {"state": "present"}}
     assert "null" not in json.dumps(shape)
 
 
