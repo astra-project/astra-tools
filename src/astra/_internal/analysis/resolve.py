@@ -211,17 +211,20 @@ class _Builder:
         """An element's ref: its analysis's key, its collection and its id."""
         return _ref(self.keys[element.analysis], f"{element.kind}s", element.id)
 
+    def commit(self, identity: Identity) -> Commit | None:
+        """The commit `identity` is read at, where that isn't the tree the root is read in."""
+        if identity.commit == self.stack.root.commit:
+            return None
+        assert identity.commit is not None  # only the root's own tree is a working tree
+        return Commit(identity.commit, self.stack.analyses[identity].url)
+
     def analysis(self, identity: Identity) -> Analysis:
         stack, key = self.stack, self.keys[identity]
         member, written = stack.analyses[identity], stack.analysis(identity)
-        commit = None
-        if identity.commit != stack.root.commit:
-            assert identity.commit is not None  # only the root's own tree is a working tree
-            commit = Commit(identity.commit, member.url)
         return Analysis(
             key,
             _from_root(stack, identity, identity.folder),
-            commit,
+            self.commit(identity),
             written.label,
             written.description,
             written.tags,
@@ -403,6 +406,7 @@ class _Builder:
             None if planned.universe is None else self.ref(planned.universe),
             tuple(sources),
             command,
+            self.commit(planned.owner),
         )
 
 

@@ -751,6 +751,16 @@ def test_results_of_an_analysis_from_a_commit_are_read_through_their_records(
     resolved = api.resolve(top)
     results = {result.id: result for result in resolved.results}
     assert owner(resolved, results["lib:out#v1"]).commit == api.Commit(holding)
+    # A result says itself which tree its places are in: a commit's, or the working tree.
+    assert {id_: result.commit for id_, result in results.items()} == {
+        "lib:out#v1": api.Commit(holding),
+        "result": None,
+        "lib:once": api.Commit(holding),
+    }
+    with pytest.raises(ValueError, match="is a result from the commit"):
+        run = api.Generation(holding, ENVIRONMENT, api.Runner("a-runner", "1"))
+        api.write_records(top, results["lib:out#v1"], "sha256:" + "0" * 64, 1, run)
+    assert git(top, "status", "--porcelain") == ""
     assert cited(api.resolve(top), report) == [("findings.insight1", 0, ("lib:once",), "unchanged")]
     build(top)
     assert {s[0] for s in statuses(api.status(top)).values()} == {"unchanged"}
@@ -1072,6 +1082,47 @@ def test_a_git_annex_key_that_gives_no_sha256_is_compared_once_fetched(worked: P
     report = api.status(worked)
     assert report.inputs == {"inputs.input1": api.Bytes("absent", "git-annex")}
     assert statuses(report)["output1#u1"] == ("stale", "present")
+
+
+def test_a_link_out_of_the_repository_is_followed_nowhere(worked: Path, tmp_path: Path) -> None:
+    """A link dressed as git-annex's, whose target leaves the tree, is no stand-in: nothing
+    outside the repository is read, hashed or said to be there. As an input it is no file, so
+    the analysis is invalid; as a result's bytes, they are absent."""
+    outside = tmp_path / "outside.csv"
+    outside.write_text("1\n")  # what `data/input1.csv` holds
+    link = "../decoy/annex/objects/../../../../outside.csv"
+    (worked / "decoy" / "annex" / "objects").mkdir(parents=True)
+    (worked / "results" / "u1" / "output1.json").unlink()
+    (worked / "results" / "u1" / "output1.json").symlink_to(f"../{link}")
+    status = api.status(worked).statuses["output1#u1"]
+    assert status.bytes == api.Bytes("absent")
+    assert [(d.code, d.message) for d in status.why] == [
+        ("ABSENT_RESULT", "no file is at results/u1/output1.json, the result's default place")
+    ]
+    (worked / "data" / "input1.csv").unlink()
+    (worked / "data" / "input1.csv").symlink_to(link)
+    assert (worked / "data" / "input1.csv").read_text() == "1\n"
+    assert [d.code for d in api.validate(worked).diagnostics] == ["MISSING_INPUT_FILE"]
+
+
+def test_each_file_is_looked_at_once_however_many_results_read_it(
+    worked: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`input1` is read by `output1` in two universes, and reported among the inputs."""
+    from astra._internal.sources import standins
+
+    looked: list[str] = []
+    look = standins.look
+
+    def counted(reader: Any, path: str, known: Any) -> standins.Found:
+        looked.append(path)
+        return look(reader, path, known)
+
+    monkeypatch.setattr(standins, "look", counted)
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    assert sorted(looked) == sorted(set(looked))
+    assert looked.count("data/input1.csv") == 1
 
 
 # --- The report as JSON ---

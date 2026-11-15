@@ -20,8 +20,9 @@ def command(path: Path | None, as_json: bool) -> None:
     then each evidence with the status of what it cites, and each input whose content isn't
     here. The records and bytes are those in the working tree.
 
-    Bytes a large-file tool keeps are shown with the tool. Nothing is fetched, and bytes that
-    aren't fetched change no status.
+    Bytes a large-file tool keeps are shown with the tool, and nothing is fetched. A result
+    reads the same whether or not its own bytes are fetched, and so does one whose input isn't,
+    with git-annex or Git LFS. An input kept by DVC must be pulled, or its results read stale.
 
     With --json, the report is printed as `astra.api.status` gives it. Exits 0 when every
     result and evidence is unchanged, 1 when one isn't or the analysis breaks a MUST, which is

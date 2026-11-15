@@ -319,3 +319,15 @@ def test_validate_reports_a_paper_whose_text_cant_be_read(home: Path) -> None:
     (diagnostic,) = json.loads(result.stdout)["diagnostics"]
     assert diagnostic["code"] == "EVIDENCE_PAPER_UNREADABLE"
     assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/doi"
+
+
+def test_validate_stops_as_any_command_does_where_the_cache_cant_be_used(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A paper cache that can't be used is a broken environment, not a bug in astra-tools."""
+    folder = analysis(git_init(home / "repo"), MINIMAL + INSIGHT.format(quote="some quote"))
+    monkeypatch.setenv("ASTRA_CACHE_DIR", "relative/cache")
+    result = astra("validate", str(folder), "-e")
+    assert result.exit_code == 2
+    assert result.stderr.startswith("astra: ASTRA_CACHE_DIR is the relative path")
+    assert "This is a bug" not in result.stderr

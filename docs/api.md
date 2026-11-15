@@ -170,9 +170,14 @@ and moved into place.
 What a record says is the runner's to find out, and true of its run: this function hashes no
 file and reads no checkout.
 
-Raises `ValueError`, and writes nothing, where the record would be invalid: `generated_by`
-hasn't one item of `inputs` for each entry the result's output lists, or a field hasn't the
-form the record schema asks for. Raises `OSError` where a record can't be written.
+Raises `ValueError`, and writes nothing, where:
+
+- `result` is a result from a commit (it has a `commit`): it is never built, and its places
+  aren't in the working tree;
+- the record would be invalid: `generated_by` hasn't one item of `inputs` for each entry the
+  result's output lists, or a field hasn't the form the record schema asks for.
+
+Raises `OSError` where a record can't be written.
 
 ## Papers
 
@@ -283,7 +288,7 @@ results = {each.id: each for each in analysis.results}
 
 for result in analysis.results:  # each comes after every result it reads
     if report.statuses[result.id].state == "unchanged" or result.command is None:
-        continue
+        continue  # up to date, or not built from the working tree alone
     # What each entry reads: an input's file, or another result's bytes.
     read = []
     for source in result.inputs:

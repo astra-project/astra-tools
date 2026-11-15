@@ -21,7 +21,7 @@ from astra._internal.analysis.stack import Member
 from astra._internal.documents import document
 from astra._internal.sources import paths
 from astra._internal.sources.reader import Reader
-from astra._internal.sources.standins import StandIn, registered
+from astra._internal.sources.standins import StandIn, look, registered
 from astra.model.diagnostic import Diagnostic
 
 CODES = frozenset(
@@ -81,8 +81,6 @@ _ELSEWHERE = "another analysis's input is read by its address, such as `<declara
 def _no_file(reader: Reader, path: str, standins: Sequence[StandIn]) -> str | None:
     """Why `path` names neither a file nor a stand-in for one; None where it names one."""
     entry = reader.stat(path)
-    if entry is not None and entry.kind == "file":
-        return None
     if entry is not None and entry.kind == "folder":
         return "is a folder: an input is one file, and data in many files is many inputs"
     if entry is not None and entry.kind == "gitlink":
@@ -90,7 +88,8 @@ def _no_file(reader: Reader, path: str, standins: Sequence[StandIn]) -> str | No
             "is a submodule: data kept in another repository isn't an input, so get it "
             "through an output's recipe, or declare the analysis it belongs to"
         )
-    if any(standin.recognises(reader, path) for standin in standins):
+    found = look(reader, path, standins)
+    if found.standin is not None or found.content is not None:
         return None
     known = ", ".join(standin.name for standin in standins)
     if entry is not None:  # a symlink

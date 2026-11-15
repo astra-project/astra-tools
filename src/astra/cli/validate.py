@@ -127,7 +127,8 @@ def _validate_one(
     stack = context.stack if context is not None and report.valid and not skip_evidence else None
     summary: list[str] = []
     if stack is not None and verify_evidence:
-        found, summary = _verify(stack)
+        with environment():
+            found, summary = _verify(stack)
         # Each is an error, so a quote that isn't verified leaves the report invalid.
         report = replace(
             report,

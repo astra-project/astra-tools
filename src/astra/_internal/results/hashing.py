@@ -18,6 +18,7 @@ from pathlib import Path
 
 from astra._internal.sources import cache
 from astra._internal.sources.reader import Reader, WorktreeReader
+from astra._internal.sources.standins import Found
 
 NAMESPACE = "hashes"
 """The cache's namespace of file hashes (`cache.NAMESPACES`)."""
@@ -72,3 +73,13 @@ def digest(reader: Reader, path: str) -> Digest | None:
     if isinstance(reader, WorktreeReader):
         return digest_file(reader.top / path)
     return digest_bytes(reader.read(path))
+
+
+def content(reader: Reader, path: str, found: Found) -> Digest | None:
+    """The digest of the content of the file at `path`, where `found` is what is there
+    (`standins.look`): what a stand-in gives of it, never the stand-in's own, or the content's
+    where it is in the tree; None where neither can be told."""
+    given = None if found.standin is None else found.standin.gives(reader, path)
+    if given is not None:
+        return Digest(*given)
+    return None if found.content is None else digest(reader, found.content)

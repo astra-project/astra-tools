@@ -282,13 +282,17 @@ fit#baseline  missing  absent  .astra/records/baseline/fit.json
 
 Each result's bytes, and each input's, come with the tool that keeps them where a stand-in is
 at the file's path: `absent, kept by git-annex` says the content isn't in this clone, and which
-tool fetches it. An input whose content isn't here is listed after the results. Bytes that
-aren't fetched don't change a result's state or the exit code, and `astra` fetches nothing.
+tool fetches it. An input whose content isn't here is listed after the results. `astra`
+fetches nothing. A result reads the same whether or not its own bytes are fetched.
 
-git-annex links, with keys of a SHA-256 backend, and Git LFS pointers are compared by the hash
-they give, without the content. A DVC file gives no SHA-256: an input kept by DVC must be
-pulled for the results made from it to read `unchanged`
+An input is another matter, as a result is made from it. git-annex links, with keys of a
+SHA-256 backend, and Git LFS pointers are compared by the hash they give, so such an input
+needn't be fetched. A DVC file gives no SHA-256: an input kept by DVC must be pulled, or the
+results made from it read `stale` and the command exits 1
 ([Data model](data-model.md#bytes)).
+
+A link is never followed out of the repository: a git-annex link counts only where it names a
+file in an `annex/objects` folder of the same working tree.
 
 ## `astra history`
 

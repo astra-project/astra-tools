@@ -5,9 +5,12 @@ It holds a status for each result of the resolved analysis, by the result's id, 
 the analysis than that: `resolve` gives the analysis. `head` is on both, so a reader that asked
 for each can tell the two were read at the same commit.
 
-A result's status doesn't depend on its bytes: a clone that hasn't fetched what a large-file
-tool keeps reads as up to date, with its bytes `absent`. `Bytes` says so of each result and each
-input, and which tool keeps them, for a runner to fetch them as it sees fit.
+A result's state never depends on its own bytes: one that isn't fetched reads as it would
+fetched, with its bytes `absent`. It does depend on its inputs' content, which a stand-in tells
+without the content where it gives a SHA-256, as git-annex's and Git LFS's do: such an input
+needs no fetching either. One kept by DVC does, as its stand-in gives none. `Bytes` says where
+the bytes of each result and each input are, and which tool keeps them, for a runner to fetch
+them as it sees fit.
 
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where

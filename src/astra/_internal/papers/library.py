@@ -3,18 +3,13 @@ in one."""
 
 from __future__ import annotations
 
-import functools
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from astra._internal.papers.cache import CachedPaper, PaperCache
 from astra.errors import PaperError
 from astra.model.paper import Paper, QuoteStatus
 from astra.model.resolved_analysis import FragmentSelector, TextQuoteSelector
-
-if TYPE_CHECKING:
-    from astra._internal.papers.pdf import PDFDocument
 
 PDF = (None, "http://tools.ietf.org/rfc/rfc3778")
 """The `conforms_to` of a PDF fragment identifier: none, or the IRI Web Annotation gives it."""
@@ -85,9 +80,10 @@ def verify_quote(
     cached = PaperCache().get(doi, version)
     if cached is None:
         return QuoteStatus("no_paper")
-    file = cached.pdf_path.stat()
+    from astra._internal.papers.pdf import extract_text_from_pdf
+
     try:
-        pdf = _text(cached.pdf_path, file.st_size, file.st_mtime_ns)
+        pdf = extract_text_from_pdf(cached.pdf_path)
     except Exception as error:  # a damaged PDF fails in as many ways as pypdf has parsers
         raise PaperError(f"the paper of {doi} in the cache can't be read: {error}") from error
     expected = page(location)
@@ -95,15 +91,6 @@ def verify_quote(
     if not found:
         return QuoteStatus("not_found")
     return QuoteStatus("found" if expected in (None, found[0]) else "elsewhere", found[0])
-
-
-@functools.lru_cache(maxsize=8)
-def _text(pdf: Path, size: int, mtime_ns: int) -> PDFDocument:
-    """The text of the PDF at `pdf`, as it is with that size and modification time: read once
-    in a process, however many quotes are sought in it."""
-    from astra._internal.papers.pdf import extract_text_from_pdf
-
-    return extract_text_from_pdf(pdf)
 
 
 def _paper(cached: CachedPaper) -> Paper:

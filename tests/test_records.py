@@ -374,3 +374,12 @@ def test_writing_a_record_again_replaces_it(tmp_path: Path, contract: Contract) 
     found = read_record(WorktreeReader(tmp_path, None), PLACE, contract)
     assert found == api.ProvenanceRecord(RESULT.id, made.content_hash, made.size, RUN)
     assert [p.name for p in (tmp_path / PLACE).parent.iterdir()] == ["subanalysis1.output1.json"]
+
+
+def test_a_result_from_a_commit_isnt_recorded(tmp_path: Path) -> None:
+    """It is never built, and its places are in its commit's tree: written in the working tree
+    they would name no place of its, and could be a tracked record's of another analysis."""
+    from_commit = replace(RESULT, commit=api.Commit("c" * 40))
+    with pytest.raises(ValueError, match="is a result from the commit c{40}: it is never built"):
+        api.write_records(tmp_path, from_commit, RECORD["content_hash"], RECORD["size"], RUN)
+    assert not (tmp_path / ".astra").exists()

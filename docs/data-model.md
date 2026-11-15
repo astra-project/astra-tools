@@ -178,6 +178,10 @@ classDiagram
     id : str
     command : str [0..1]
   }
+  class Commit {
+    id : str
+    repository : str [0..1]
+  }
   class Place {
     address : str
     record_path : str
@@ -195,6 +199,7 @@ classDiagram
   ResolvedAnalysis *-- "*" Diagnostic : notes
   Result *-- "1..*" Place : places
   Result *-- "*" Source : inputs
+  Result *-- "0..1" Commit : commit
   Result o-- "1" Output : output
   Result o-- "0..1" Universe : universe
   Source o-- Input : input
@@ -487,10 +492,14 @@ that nothing reads, is named in the notes.
 | `universe` | `str`, optional | Its universe, by ref; none for an output built once |
 | `inputs` | list of [`Source`](#source) | One for each entry of its output's `inputs`, in order |
 | `command` | `str`, optional | Its recipe's command as it runs, in the folder of its output's analysis, with each path relative to that folder |
+| `commit` | [`Commit`](#commit), optional | The commit whose tree its places are in, where the analysis it belongs to is read at one; none for a result whose places are in the working tree |
 
 A result has no `command` where it isn't built from the working tree alone: a result of an
 analysis read at a commit, one whose recipe runs on a commit's files, or one that reads a file
 at a commit.
+
+A result with a `commit` is a result from a commit: it is never built, its record is the one
+at that commit, and `write_records` refuses it.
 
 ### `Place`
 
@@ -690,7 +699,7 @@ A **stand-in** is what a large-file tool keeps in a file's place. astra-tools re
 
 | Tool | Its stand-in | The content is here when | Compared without the content |
 |---|---|---|---|
-| git-annex, locked file | A link into `annex/objects`, at the path | The link leads to a file | Yes, for a key of a SHA-256 backend, which is the default |
+| git-annex, locked file | A link at the path that names a file in an `annex/objects` folder of the same working tree | That file is there | Yes, for a key of a SHA-256 backend, which is the default |
 | git-annex, unlocked file | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes, the same |
 | Git LFS | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes |
 | DVC | A `.dvc` file beside the path | A file is at the path | No: it gives an MD5, and a record a SHA-256 |
@@ -699,6 +708,11 @@ So with git-annex and Git LFS, an analysis whose inputs and results aren't fetch
 and its results read `unchanged`. With DVC, results that aren't fetched read `unchanged` too,
 but **an input kept by DVC must be pulled** for the results made from it to be compared: until
 then they read `stale`. The same holds for a git-annex key of a backend other than SHA-256.
+
+astra-tools follows no link. A git-annex link counts only where it names a file inside the
+working tree, by a relative path that crosses no other link, so nothing outside the repository
+is ever read. A link beside a DVC file isn't followed either: with DVC's `symlink` cache type,
+the content reads as `absent`.
 
 `kept_by` names the stand-in that is on disk. A file whose content a tool has put in place of
 its pointer, as git-annex does for an unlocked file and Git LFS always, reads as a plain file.

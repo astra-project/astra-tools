@@ -46,8 +46,9 @@ class Reader(Protocol):
         """The repository read, if any."""
         ...
 
-    def read(self, path: str) -> bytes:
-        """The bytes of the file at `path`; raises OSError where there is none."""
+    def read(self, path: str, limit: int | None = None) -> bytes:
+        """The bytes of the file at `path`, or its first `limit`; raises OSError where there
+        is none."""
         ...
 
     def stat(self, path: str) -> Entry | None:
@@ -81,8 +82,9 @@ class WorktreeReader:
     top: Path  # the top of the repository's working tree, or the analysis's folder without one
     repo: Repository | None
 
-    def read(self, path: str) -> bytes:
-        return (self.top / path).read_bytes()
+    def read(self, path: str, limit: int | None = None) -> bytes:
+        with open(self.top / path, "rb") as file:
+            return file.read(-1 if limit is None else limit)
 
     def stat(self, path: str) -> Entry | None:
         if path == "":
@@ -211,11 +213,11 @@ class CommitReader:
         self._submodules: dict[str, CommitReader | UnreachableError] = {}
         self._gitmodules: dict[str, str] | None = None
 
-    def read(self, path: str) -> bytes:
+    def read(self, path: str, limit: int | None = None) -> bytes:
         found = self._found(path)
         if found is None or not found.mode.startswith("100"):
             raise FileNotFoundError(errno.ENOENT, f"no file at {path} in {self.commit}", path)
-        return found.reader._blob(found.oid, path)
+        return found.reader._blob(found.oid, path)[:limit]
 
     def stat(self, path: str) -> Entry | None:
         found = self._found(path)

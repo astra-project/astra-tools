@@ -15,7 +15,7 @@ A checker reads records only through planned results, which the resolved analysi
   selected for it where it is read and the case it takes, whatever bytes result (Results *made
   from*); otherwise it is `unchanged`;
 - its bytes are `present` where reading its default place gives the record's, through a
-  stand-in's link too (`content.look`), and `absent` otherwise. `ABSENT_RESULT` is for bytes
+  stand-in's link too (`standins.look`), and `absent` otherwise. `ABSENT_RESULT` is for bytes
   that are neither there nor stood in for there, where it has a valid record: a stand-in for
   the recorded bytes, such as a large-file pointer that isn't fetched, breaks nothing.
 
@@ -47,12 +47,12 @@ from astra._internal.analysis.universes import Place, Planned, Selection, Step, 
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.documents.contract import Contract
 from astra._internal.results import hashing
-from astra._internal.results.content import Content, look
 from astra._internal.results.records import read_record
 from astra._internal.sources import standins
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import CommitReader
 from astra._internal.sources.remote import Remotes
+from astra._internal.sources.standins import Found
 from astra.model.diagnostic import Diagnostic, Location
 from astra.model.provenance_record import ProvenanceRecord, RecordedInput
 from astra.model.resolved_analysis import Result
@@ -163,6 +163,7 @@ class _Checker:
         self.remotes = remotes
         self.standins = standins.registered()
         self._bound: dict[tuple[Repository, str, str], Context | str] = {}
+        self._found: dict[tuple[Identity, str], tuple[Found, hashing.Digest | None]] = {}
 
     def place(
         self,
@@ -353,7 +354,7 @@ class _Checker:
             )
             if source.result is None:
                 path = input_path(self.stack, through.target)
-                found = self._look(through.target.analysis, path).digest()
+                _, found = self._look(through.target.analysis, path)
                 if found is None:  # stale, since it can't be compared
                     changes.append(
                         f"the content of `{source.entry}` can't be read at {path}: no file is "
@@ -370,20 +371,27 @@ class _Checker:
                 stale.append(source.entry)
         return changes, stale
 
-    def _look(self, analysis: Identity, path: str) -> Content:
-        """What is at `path`, a file of `analysis`: an input's, or a result's bytes."""
-        return look(self.stack.analyses[analysis].reader, path, self.standins)
+    def _look(self, analysis: Identity, path: str) -> tuple[Found, hashing.Digest | None]:
+        """What is at `path`, a file of `analysis`, an input's or a result's bytes, and its
+        content's digest: looked at once, however many results read it."""
+        if (analysis, path) not in self._found:
+            reader = self.stack.analyses[analysis].reader
+            found = standins.look(reader, path, self.standins)
+            self._found[analysis, path] = found, hashing.content(reader, path, found)
+        return self._found[analysis, path]
 
     def inputs(self, resolved: Resolved) -> dict[str, Bytes]:
         """Where the content of each input of the resolved analysis is, by the input's ref."""
-        found: dict[str, Bytes] = {}
+        inputs: dict[str, Bytes] = {}
         identities = sorted(resolved.keys, key=resolved.keys.__getitem__)
         for analysis, identity in zip(resolved.analysis.analyses, identities, strict=True):
             for input_ in analysis.inputs:
                 element = Element(identity, "input", input_.ref.rpartition(".")[2])
-                content = self._look(identity, input_path(self.stack, element))
-                found[input_.ref] = Bytes("present" if content.here else "absent", content.kept_by)
-        return found
+                found, _ = self._look(identity, input_path(self.stack, element))
+                inputs[input_.ref] = Bytes(
+                    "absent" if found.content is None else "present", found.kept_by
+                )
+        return inputs
 
     def _bytes(
         self, member: Member, place: Place, record: ProvenanceRecord | None
@@ -391,16 +399,15 @@ class _Checker:
         """Where the bytes are at `place`, against `record`, the result's record there or None
         where it has none, and `ABSENT_RESULT` where neither they nor a stand-in for them is
         there and it has one."""
-        found = self._look(member.identity, place.bytes)
+        found, digest = self._look(member.identity, place.bytes)
         if record is None:  # no recorded bytes, so absent, but no ABSENT_RESULT
             return Bytes("absent", found.kept_by), ()
-        digest = found.digest()
         if digest == _digest(record):
-            return Bytes("present" if found.here else "absent", found.kept_by), ()
+            return Bytes("absent" if found.content is None else "present", found.kept_by), ()
         if digest is None and found.standin is not None:
             # A stand-in that gives no hash is taken to stand for the recorded bytes.
             return Bytes("absent", found.kept_by), ()
-        if found.here:
+        if found.content is not None:
             message = f"the bytes at {place.bytes} aren't the ones its record gives"
         elif found.standin is not None:
             message = (

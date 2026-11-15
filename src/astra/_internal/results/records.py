@@ -97,10 +97,16 @@ def write_records(
     indentation and a final line break, written to a temporary file in the same folder, its
     folders made if need be, then moved into place by `os.replace`.
 
-    Raises ValueError, and writes nothing, where the record would be invalid: `generated_by`
-    hasn't one item of `inputs` for each entry the result's output lists
-    (`MISSING_RECORD_INPUTS`), or a field hasn't the form the record schema asks for. Raises
-    OSError where a record can't be written."""
+    Raises ValueError, and writes nothing, where `result` is a result from a commit
+    (`Result.commit`), which is never built and whose places aren't in the working tree; and
+    where the record would be invalid: `generated_by` hasn't one item of `inputs` for each
+    entry the result's output lists (`MISSING_RECORD_INPUTS`), or a field hasn't the form the
+    record schema asks for. Raises OSError where a record can't be written."""
+    if result.commit is not None:
+        raise ValueError(
+            f"`{result.id}` is a result from the commit {result.commit.id}: it is never built, "
+            "and its record is the one at that commit"
+        )
     listed = sorted(source.entry for source in result.inputs)
     if sorted(item.entry for item in generated_by.inputs) != listed:
         raise ValueError(

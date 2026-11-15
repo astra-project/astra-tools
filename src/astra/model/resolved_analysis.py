@@ -223,6 +223,9 @@ class Result:
     # analysis, with each path relative to that folder. None for a result that isn't built from
     # the working tree alone: a result from a commit, one whose recipe runs on a commit's files,
     # or one that reads a file at a commit, which has no place in the working tree
+    commit: Commit | None = None  # the commit whose tree its places are in, where the analysis
+    # it belongs to is read at one: a result from a commit, which is never built, and whose
+    # record is the one at that commit. None for a result whose places are in the working tree
 
 
 @dataclass(frozen=True)
