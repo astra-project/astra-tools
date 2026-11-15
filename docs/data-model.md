@@ -167,10 +167,10 @@ What validating an analysis found, over its whole stack.
 A resolved analysis is an analysis with every rule of the specification already applied. Two
 rules decide what is in it.
 
-It holds **what the rules give, not what they start from**. Where an `astra.yaml` writes
-something only for a rule to act on, the model holds the outcome: a universe's effective
-selection and no `derived_from`, what each result's `inputs` reads,
-a command as it runs and no template. What a file writes for people to read stays as written:
+The model holds each universe's effective selection, each result's effective inputs,
+and its rendered command. It also retains authored output dependencies and switch cases
+so consumers can inspect branches with no planned results. Universe inheritance and
+recipe templates are not retained. What a file writes for people to read stays as written:
 labels, descriptions, rationales, claims, quotes.
 
 It holds **each fact once**. A result carries its places, what it reads and its command. It

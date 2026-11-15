@@ -1513,6 +1513,9 @@ def test_evidence_preserves_an_authored_universe_pin(tmp_path: Path) -> None:
     )
     evidence = api.resolve(folder).analyses[0].findings[0].evidence[0]
     assert (evidence.artifact, evidence.cites) == ("output1#u1", ("output1#u1",))
+    assert evidence.bindings == (
+        api.EvidenceBinding("universes.u1", "outputs.output1", "universes.u1", "output1#u1"),
+    )
 
 
 def nulls(value: Any) -> bool:

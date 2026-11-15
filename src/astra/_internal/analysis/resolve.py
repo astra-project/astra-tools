@@ -351,18 +351,8 @@ class _Builder:
                 "finding" if collection == "findings" else "prior_insight",
                 each.claim,
                 tuple(
-                    Evidence(
-                        evidence.doi,
-                        evidence.version,
-                        self.cited(identity, (collection, id_, "evidence", index, "artifact"))
-                        if evidence.artifact is not None
-                        else None,
-                        evidence.quote,
-                        evidence.location,
-                        evidence.artifact,
-                        self.bindings(identity, (collection, id_, "evidence", index, "artifact"))
-                        if evidence.artifact is not None
-                        else None,
+                    self.evidence(
+                        identity, (collection, id_, "evidence", index, "artifact"), evidence
                     )
                     for index, evidence in enumerate(each.evidence)
                 ),
@@ -374,13 +364,25 @@ class _Builder:
             for id_, each in written.items()
         )
 
-    def cited(self, identity: Identity, pointer: tuple[str | int, ...]) -> tuple[str, ...]:
-        return tuple(
-            dict.fromkeys(
-                binding.result
-                for binding in self.bindings(identity, pointer)
-                if binding.result is not None
+    def evidence(
+        self, identity: Identity, pointer: tuple[str | int, ...], written: document.Evidence
+    ) -> Evidence:
+        bindings = self.bindings(identity, pointer) if written.artifact is not None else None
+        cites = (
+            None
+            if bindings is None
+            else tuple(
+                dict.fromkeys(binding.result for binding in bindings if binding.result is not None)
             )
+        )
+        return Evidence(
+            written.doi,
+            written.version,
+            cites,
+            written.quote,
+            written.location,
+            written.artifact,
+            bindings,
         )
 
     def bindings(

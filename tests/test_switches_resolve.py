@@ -718,3 +718,13 @@ def test_bindings_and_authored_edges_survive_without_planned_results(tmp_path: P
     assert child.findings[0].evidence[0].bindings == (
         api.EvidenceBinding("child.universes.u1", "child.outputs.base"),
     )
+
+
+def test_authored_graph_preserves_canonical_cross_analysis_pins(running: Path) -> None:
+    root = api.resolve(running).analyses[0]
+    output = next(output for output in root.outputs if output.ref == "outputs.output2")
+    assert output.inputs == (
+        api.AuthoredReference("output1#u1", "outputs.output1", "universes.u1"),
+        api.AuthoredReference("output1#u2", "outputs.output1", "universes.u2"),
+        api.AuthoredReference("stage.output3#v1", "stage.outputs.output3", "stage.universes.v1"),
+    )
