@@ -82,6 +82,18 @@ def test_a_paper_added_from_a_pdf_is_listed_shown_and_found(home: Path) -> None:
     assert astra("paper", "show", DOI).exit_code == 1
 
 
+def test_a_paper_that_cant_be_added_is_an_error_as_the_api_gives_it(home: Path) -> None:
+    """`paper add` is `api.add_paper`: what isn't a PDF, and a paper that isn't downloaded,
+    each exit 1 with the reason, and keep nothing."""
+    notes = home / "notes.txt"
+    notes.write_text("not a PDF")
+    refused = astra("paper", "add", DOI, "--pdf", str(notes))
+    assert refused.exit_code == 1 and "not a valid PDF" in refused.stdout
+    missing = astra("paper", "add", DOI)
+    assert missing.exit_code == 1 and "Only arXiv papers" in missing.stdout
+    assert astra("paper", "list").stdout.strip() == "No papers cached"
+
+
 def test_verify_quotes_reads_evidence_items_on_stdin_and_writes_each_status(home: Path) -> None:
     """Each item has the `quote` and `location` of an evidence item, and each status is what
     `api.verify_quote` gives, in the same order."""
