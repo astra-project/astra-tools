@@ -77,9 +77,11 @@ def digest(reader: Reader, path: str) -> Digest | None:
 
 def content(reader: Reader, path: str, found: Found) -> Digest | None:
     """The digest of the content of the file at `path`, where `found` is what is there
-    (`standins.look`): what a stand-in gives of it, never the stand-in's own, or the content's
-    where it is in the tree; None where neither can be told."""
-    given = None if found.standin is None else found.standin.gives(reader, path)
+    (`standins.look`): the file's own, or what a stand-in gives of it, never the stand-in's
+    own, or that of the file a stand-in leads to; None where none can be told."""
+    if found.standin is None:
+        return digest(reader, path)
+    given = found.standin.gives(reader, path)
     if given is not None:
         return Digest(*given)
-    return None if found.content is None else digest(reader, found.content)
+    return None if found.file is None else digest_file(found.file)

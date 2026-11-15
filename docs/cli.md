@@ -291,8 +291,9 @@ needn't be fetched. A DVC file gives no SHA-256: an input kept by DVC must be pu
 results made from it read `stale` and the command exits 1
 ([Data model](data-model.md#bytes)).
 
-A link is never followed out of the repository: a git-annex link counts only where it names a
-file in an `annex/objects` folder of the same working tree.
+A link is followed only for a stand-in: a git-annex link to the file it leads to in an
+`annex/objects` folder, and what is at the path beside a DVC file
+([Data model](data-model.md#bytes)).
 
 ## `astra history`
 

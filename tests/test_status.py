@@ -1084,10 +1084,10 @@ def test_a_git_annex_key_that_gives_no_sha256_is_compared_once_fetched(worked: P
     assert statuses(report)["output1#u1"] == ("stale", "present")
 
 
-def test_a_link_out_of_the_repository_is_followed_nowhere(worked: Path, tmp_path: Path) -> None:
-    """A link dressed as git-annex's, whose target leaves the tree, is no stand-in: nothing
-    outside the repository is read, hashed or said to be there. As an input it is no file, so
-    the analysis is invalid; as a result's bytes, they are absent."""
+def test_a_link_that_is_no_stand_ins_is_followed_nowhere(worked: Path, tmp_path: Path) -> None:
+    """A link dressed as git-annex's, whose target leaves the tree, is no stand-in: what it
+    leads to is neither read nor said to be there. As an input it is no file, so the analysis
+    is invalid; as a result's bytes, they are absent."""
     outside = tmp_path / "outside.csv"
     outside.write_text("1\n")  # what `data/input1.csv` holds
     link = "../decoy/annex/objects/../../../../outside.csv"
@@ -1103,6 +1103,24 @@ def test_a_link_out_of_the_repository_is_followed_nowhere(worked: Path, tmp_path
     (worked / "data" / "input1.csv").symlink_to(link)
     assert (worked / "data" / "input1.csv").read_text() == "1\n"
     assert [d.code for d in api.validate(worked).diagnostics] == ["MISSING_INPUT_FILE"]
+
+
+def test_what_dvc_links_from_a_cache_outside_the_repository_is_present(
+    worked: Path, tmp_path: Path
+) -> None:
+    """DVC's cache can be anywhere, and its `symlink` cache type leaves a link at the path:
+    it is followed, for a result's bytes and for an input's content alike."""
+    cache = tmp_path / "shared-cache"
+    cache.mkdir()
+    for path in ("results/u1/output1.json", "data/input1.csv"):
+        dvc(worked, path)
+        kept = cache / path.replace("/", "-")
+        (worked / path).rename(kept)
+        (worked / path).symlink_to(kept)
+    report = api.status(worked)
+    assert statuses(report) == UNCHANGED
+    assert report.statuses["output1#u1"].bytes == api.Bytes("present", "DVC")
+    assert report.inputs == {"inputs.input1": api.Bytes("present", "DVC")}
 
 
 def test_each_file_is_looked_at_once_however_many_results_read_it(

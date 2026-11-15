@@ -699,20 +699,27 @@ A **stand-in** is what a large-file tool keeps in a file's place. astra-tools re
 
 | Tool | Its stand-in | The content is here when | Compared without the content |
 |---|---|---|---|
-| git-annex, locked file | A link at the path that names a file in an `annex/objects` folder of the same working tree | That file is there | Yes, for a key of a SHA-256 backend, which is the default |
+| git-annex, locked file | A link at the path, into an `annex/objects` folder | The link leads to a file | Yes, for a key of a SHA-256 backend, which is the default |
 | git-annex, unlocked file | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes, the same |
 | Git LFS | A pointer file at the path, only while the content isn't fetched | The path holds the content | Yes |
-| DVC | A `.dvc` file beside the path | A file is at the path | No: it gives an MD5, and a record a SHA-256 |
+| DVC | A `.dvc` file beside the path | A file is at the path, or a link from DVC's cache | No: it gives an MD5, and a record a SHA-256 |
 
 So with git-annex and Git LFS, an analysis whose inputs and results aren't fetched validates,
 and its results read `unchanged`. With DVC, results that aren't fetched read `unchanged` too,
 but **an input kept by DVC must be pulled** for the results made from it to be compared: until
 then they read `stale`. The same holds for a git-annex key of a backend other than SHA-256.
 
-astra-tools follows no link. A git-annex link counts only where it names a file inside the
-working tree, by a relative path that crosses no other link, so nothing outside the repository
-is ever read. A link beside a DVC file isn't followed either: with DVC's `symlink` cache type,
-the content reads as `absent`.
+astra-tools follows a link only for a stand-in, as the operating system follows it:
+
+- a git-annex link, to the file it leads to, where that file really is in an `annex/objects`
+  folder. So a submodule or a linked worktree works, whose object store is outside its tree,
+  and a link merely dressed as git-annex's leads nowhere;
+- what is at the path beside a DVC file, wherever it leads, as DVC's cache can be anywhere.
+
+A link that is no stand-in's is never followed. This favours convenience: a repository can
+make `astra status` say whether a file is at a path of your machine, and whether it has a hash
+the repository gives, by a link beside a `.dvc` file. It never shows a file's content. That
+matters only where you run `astra` on a repository you don't trust and show its output.
 
 `kept_by` names the stand-in that is on disk. A file whose content a tool has put in place of
 its pointer, as git-annex does for an unlocked file and Git LFS always, reads as a plain file.

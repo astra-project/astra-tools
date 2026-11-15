@@ -89,7 +89,7 @@ def _no_file(reader: Reader, path: str, standins: Sequence[StandIn]) -> str | No
             "through an output's recipe, or declare the analysis it belongs to"
         )
     found = look(reader, path, standins)
-    if found.standin is not None or found.content is not None:
+    if found.standin is not None or found.here:
         return None
     known = ", ".join(standin.name for standin in standins)
     if entry is not None:  # a symlink

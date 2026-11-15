@@ -55,6 +55,13 @@ class Reader(Protocol):
         """What is at `path`; None if nothing is."""
         ...
 
+    def follow(self, path: str) -> Path | None:
+        """The file on disk that what is at `path` leads to, as the operating system follows
+        it, through any link; None where it leads to no file, and for a tree that isn't on
+        disk. Nothing else follows a link: only a stand-in asks, for the content it stands
+        for."""
+        ...
+
     def tracked(self, folder: str, paths: Collection[str]) -> frozenset[str]:
         """Those of `paths` that are tracked in the repository that holds the analysis in
         `folder`: read in the working tree, in its index; read at a commit, in that commit's
@@ -95,6 +102,10 @@ class WorktreeReader:
         if kind == "symlink":
             return Entry(kind, os.readlink(self.top / path))
         return None if kind is None else Entry(kind)
+
+    def follow(self, path: str) -> Path | None:
+        file = (self.top / path).resolve()
+        return file if file.is_file() else None
 
     def tracked(self, folder: str, paths: Collection[str]) -> frozenset[str]:
         if self.repo is None:
@@ -227,6 +238,9 @@ class CommitReader:
         if kind == "symlink":
             return Entry(kind, os.fsdecode(found.reader._blob(found.oid, path)))
         return Entry(kind)
+
+    def follow(self, path: str) -> Path | None:
+        return None  # a commit's tree isn't on disk, and a tool's store is the tool's to read
 
     def tracked(self, folder: str, paths: Collection[str]) -> frozenset[str]:
         # The analysis's folder crosses no gitlink: binding reads it in the submodule's commit.

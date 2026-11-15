@@ -5,20 +5,23 @@ fetches what they stand for:
 
 - Git LFS: a pointer file at the path (`version https://git-lfs.github.com/spec/v1`, then
   `oid sha256:…` and `size …`);
-- git-annex: a symlink at the path whose target is in an `annex/objects/` folder of the same
-  tree, or an unlocked pointer file there, whose one line is a path into `/annex/objects/`;
+- git-annex: a symlink at the path whose target, a relative one, names a file in an
+  `annex/objects/` folder of the tree, or an unlocked pointer file there, whose one line is a
+  path into `/annex/objects/`;
 - DVC: a `<path>.dvc` file beside the path.
 
 A stand-in isn't the content, but it can give the content's hash and size, which the checker
 compares: a Git LFS pointer gives both, a git-annex link both for a key of its `SHA256` and
 `SHA256E` backends, and a DVC file no SHA-256.
 
-It can also say where the content is in the same tree, where it is there: the file a git-annex
-link names, once it is fetched, and the path itself beside a DVC file. A pointer file, of Git
-LFS or of git-annex, is there only while the content isn't, as the tool puts the content in its
-place. That is a path for the Reader to read as it reads any other, so nothing here follows a
-link: a link that names a file outside the tree, or through another link, leads nowhere.
-Nothing asks a tool, or a remote, whether it has the content: fetching is a runner's.
+It can also say where the content is on disk, where it is in this clone. A link is followed
+only for that, as the operating system follows it: a git-annex link to the file it names, once
+it is fetched, where that file really is in an `annex/objects` folder, so in a submodule or a
+linked worktree too, whose store is outside the tree; and what is at the path beside a DVC
+file, wherever DVC's cache is. A pointer file, of Git LFS or of git-annex, is there only while
+the content isn't, as the tool puts the content in its place. A link that is no stand-in's is
+never followed. Nothing asks a tool, or a remote, whether it has the content: fetching is a
+runner's.
 
 A file an analysis names, an input's or a result's, is read one way, `look`: it is its content,
 a stand-in for it, or neither.
@@ -33,6 +36,7 @@ import posixpath
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from astra._internal.sources import paths
@@ -78,10 +82,10 @@ class StandIn(Protocol):
         `place(path)`, which it recognises, stands in for; None where it doesn't give both."""
         ...
 
-    def content(self, reader: Reader, path: str) -> str | None:
-        """The path, in the tree `reader` reads, of the file that holds the content that what
-        is at `place(path)`, which it recognises, stands in for; None where the content isn't
-        in that tree."""
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """The file on disk that holds the content that what is at `place(path)`, which it
+        recognises, stands in for (`Reader.follow`); None where the content isn't in this
+        clone."""
         ...
 
 
@@ -119,7 +123,7 @@ class GitLfs:
             return None
         return oid, int(size)
 
-    def content(self, reader: Reader, path: str) -> str | None:
+    def content(self, reader: Reader, path: str) -> Path | None:
         return None  # a pointer is at the path only while the content isn't
 
 
@@ -142,13 +146,15 @@ class GitAnnex:
         found = None if key is None else _ANNEX_SHA256.match(key.rpartition("/")[2])
         return None if found is None else (f"sha256:{found[2]}", int(found[1]))
 
-    def content(self, reader: Reader, path: str) -> str | None:
-        """The file a link names, once it is fetched; a pointer file is there only while the
-        content isn't."""
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """The file a link leads to, once it is fetched, where that really is in an
+        `annex/objects` folder: a link dressed as git-annex's that leads elsewhere isn't
+        followed. A pointer file is there only while the content isn't."""
         entry = reader.stat(path)
-        key = self._key(reader, path) if entry is not None and entry.kind == "symlink" else None
-        found = None if key is None else reader.stat(key)
-        return key if found is not None and found.kind == "file" else None
+        if entry is None or entry.kind != "symlink" or self._key(reader, path) is None:
+            return None
+        file = reader.follow(path)
+        return file if file is not None and "/annex/objects/" in file.as_posix() else None
 
     def _key(self, reader: Reader, path: str) -> str | None:
         """The path into `annex/objects/` that the link at `path` names, if it is one: a
@@ -181,11 +187,10 @@ class Dvc:
     def gives(self, reader: Reader, path: str) -> tuple[str, int] | None:
         return None  # a DVC file gives an MD5, not a SHA-256
 
-    def content(self, reader: Reader, path: str) -> str | None:
-        """The file at the path itself, where DVC writes it. A link from its cache isn't
-        followed."""
-        entry = reader.stat(path)
-        return path if entry is not None and entry.kind == "file" else None
+    def content(self, reader: Reader, path: str) -> Path | None:
+        """What is at the path itself, where DVC writes the file or links it from its cache,
+        which can be anywhere."""
+        return reader.follow(path)
 
 
 BUILT_IN: tuple[StandIn, ...] = (GitLfs(), GitAnnex(), Dvc())
@@ -197,9 +202,10 @@ class Found:
     """What is at the path of a file an analysis names: its content, a stand-in for it, or
     neither."""
 
+    here: bool = False  # whether the content is in this clone: at the path, or where a
+    # stand-in leads
     standin: StandIn | None = None  # the stand-in there, where one is
-    content: str | None = None  # the path, in the same tree, of the file that holds the
-    # content: the path itself, or what a stand-in says; None where the content isn't there
+    file: Path | None = None  # for a stand-in whose content is here, the file that holds it
 
     @property
     def kept_by(self) -> str | None:
@@ -212,9 +218,10 @@ def look(reader: Reader, path: str, standins: Sequence[StandIn]) -> Found:
     its content is, or the file itself."""
     for standin in standins:
         if standin.recognises(reader, path):
-            return Found(standin, standin.content(reader, path))
+            file = standin.content(reader, path)
+            return Found(file is not None, standin, file)
     entry = reader.stat(path)
-    return Found(None, path if entry is not None and entry.kind == "file" else None)
+    return Found(entry is not None and entry.kind == "file")
 
 
 def registered() -> tuple[StandIn, ...]:

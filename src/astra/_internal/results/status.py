@@ -388,9 +388,7 @@ class _Checker:
             for input_ in analysis.inputs:
                 element = Element(identity, "input", input_.ref.rpartition(".")[2])
                 found, _ = self._look(identity, input_path(self.stack, element))
-                inputs[input_.ref] = Bytes(
-                    "absent" if found.content is None else "present", found.kept_by
-                )
+                inputs[input_.ref] = Bytes("present" if found.here else "absent", found.kept_by)
         return inputs
 
     def _bytes(
@@ -403,11 +401,11 @@ class _Checker:
         if record is None:  # no recorded bytes, so absent, but no ABSENT_RESULT
             return Bytes("absent", found.kept_by), ()
         if digest == _digest(record):
-            return Bytes("absent" if found.content is None else "present", found.kept_by), ()
+            return Bytes("present" if found.here else "absent", found.kept_by), ()
         if digest is None and found.standin is not None:
             # A stand-in that gives no hash is taken to stand for the recorded bytes.
             return Bytes("absent", found.kept_by), ()
-        if found.content is not None:
+        if found.here:
             message = f"the bytes at {place.bytes} aren't the ones its record gives"
         elif found.standin is not None:
             message = (
