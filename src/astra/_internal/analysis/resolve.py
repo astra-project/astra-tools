@@ -41,7 +41,7 @@ from astra._internal.analysis.validate import validated
 from astra._internal.documents import document
 from astra._internal.documents.grammar import TEMPLATE, fill
 from astra._internal.sources import paths
-from astra._internal.sources.reader import worktree
+from astra._internal.sources.reader import analysis_below, worktree
 from astra._internal.sources.remote import Remotes
 from astra.errors import InvalidAnalysisError
 from astra.model.diagnostic import Diagnostic
@@ -526,36 +526,18 @@ def _outside_folder(context: Context, editable: Editable) -> Iterator[Diagnostic
     """`CODE_OUTSIDE_ANALYSIS`: each command of an analysis read as the root is that names a
     path climbing out of the analysis's folder, where the recipe runs, or one inside a folder
     below it that holds an `astra.yaml` of its own: the code a recipe runs is tracked in its
-    analysis's folder, outside every analysis below it, or its output's inputs give it. Whether
-    a folder holds an `astra.yaml` is read through the analysis's Reader, once for each folder:
-    every analysis read as the root is is read in one tree."""
-    holds: dict[str, bool] = {}
-
-    def below(member: Member, path: str) -> str | None:
-        """The folder below `member`'s, on the way to `path` there, that holds an `astra.yaml`
-        of its own, the outermost; None where there is none."""
-        folder = member.identity.folder
-        inside = paths.join(folder, path)
-        assert inside is not None  # a path that climbs out of `folder` isn't read here
-        parts = (inside[len(folder) + 1 :] if folder else inside).split("/")[:-1]
-        for count in range(1, len(parts) + 1):
-            inner = posixpath.join(folder, *parts[:count])
-            if inner not in holds:
-                entry = member.reader.stat(posixpath.join(inner, "astra.yaml"))
-                holds[inner] = entry is not None and entry.kind == "file"
-            if holds[inner]:
-                return inner
-        return None
-
+    analysis's folder, outside every analysis below it, or its output's inputs give it."""
     for member, analysis in editable:
+        folder = member.identity.folder
         for id_, output in analysis.outputs.items():
             if output.recipe is None:  # a switch runs nothing
                 continue
             named: list[str] = []
             for path in _paths(output.recipe.command):
-                if _climbs(path):
+                inside = paths.join("", path)  # tidied, from the folder; None where it climbs out
+                if inside is None:
                     named.append(f"`{path}`, outside its analysis's folder")
-                elif (inner := below(member, path)) is not None:
+                elif (inner := analysis_below(member.reader, folder, inside)) is not None:
                     named.append(f"`{path}`, inside `{inner}`, which holds an analysis of its own")
             if not named:
                 continue
@@ -583,14 +565,3 @@ def _paths(command: str) -> list[str]:
         if "\0" not in word and not word.startswith("/") and word not in found:
             found.append(word)
     return found
-
-
-def _climbs(path: str) -> bool:
-    """Whether `path` climbs out of the folder it is read from: its `..` outnumber the folders
-    before them, read from the left."""
-    depth = 0
-    for part in path.split("/"):
-        depth += -1 if part == ".." else int(part not in ("", "."))
-        if depth < 0:
-            return True
-    return False

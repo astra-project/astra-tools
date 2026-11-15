@@ -13,10 +13,8 @@ result it built (`UNRECORDED_RESULT`), and refuses a record a checker would then
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +23,7 @@ from typing import Any
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.documents.contract import Contract
 from astra._internal.documents.load import ParseError, load_json
+from astra._internal.documents.scaffold import write_text
 from astra._internal.sources.reader import CommitReader, Reader
 from astra.model import to_json
 from astra.model.diagnostic import Diagnostic, Location
@@ -122,13 +121,4 @@ def write_records(
             raise ValueError("; ".join(diagnostic.message for diagnostic in broken))
         written[Path(folder, place.record_path)] = text
     for path, text in written.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(text)
-            os.chmod(temporary, 0o644)
-            os.replace(temporary, path)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(temporary)
+        write_text(path, text)

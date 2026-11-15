@@ -35,7 +35,6 @@ from astra._internal.analysis.universes import (
     Selection,
     names_option,
     options,
-    own_keys,
     own_universes,
 )
 from astra._internal.documents import document
@@ -84,21 +83,19 @@ def _unused(context: Context) -> Iterator[Diagnostic]:
     for member, _ in stack.determined():
         run = context.runs[member.identity]
         universes = own_universes(stack, member.identity)
+        holding: dict[Resolution, list[Element]] = {}  # each key, by who sets or inherits it
         for universe in universes:
             selection = context.selections[universe]
-            for key in own_keys(stack, universe):
+            for key in context.written[universe] if selection is None else selection.entries:
+                holding.setdefault(key, []).append(universe)
+        for universe in universes:
+            selection = context.selections[universe]
+            for key in context.written[universe]:
                 decision = key.element
                 if decision is None:
                     continue
-                inheriting = [
-                    other
-                    for other in universes
-                    if (found := context.selections[other]) is not None
-                    and other != universe
-                    and any(entry is key for entry in found.entries)
-                ]
-                on_branch = decision in run.branches.get(universe, frozenset()) or any(
-                    decision in run.branches.get(other, frozenset()) for other in inheriting
+                on_branch = any(
+                    decision in run.branches.get(other, frozenset()) for other in holding[key]
                 )
                 location = context.at(key.file, key.pointer, key.key)
                 if not on_branch:

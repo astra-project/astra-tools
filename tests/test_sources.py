@@ -3,13 +3,14 @@ a path, a symlink never followed, is tested through the rules on inputs (`test_i
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from astra._internal.sources.git import Repository
 from astra._internal.sources.paths import join, lies_inside
-from astra._internal.sources.reader import WorktreeReader
+from astra._internal.sources.reader import Entry, WorktreeReader
 from tests.conftest import repository
 
 
@@ -58,3 +59,24 @@ def test_a_reader_reads_on_disk_whatever_git_holds(tmp_path: Path) -> None:
     top = repository(tmp_path, {"astra.yaml": "old"})
     (top / "astra.yaml").write_text("new")
     assert WorktreeReader(top, Repository(top)).read("astra.yaml") == b"new"
+
+
+def test_a_reader_lists_each_folder_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """However many paths are asked of it: it reads the tree as it was when it first looked,
+    and another reader reads it anew."""
+    top = repository(tmp_path, {"data/a.csv": "1\n", "data/b.csv": "2\n"})
+    tree = WorktreeReader(top, Repository(top))
+    listed: list[Path] = []
+    scandir = os.scandir
+
+    def counted(folder: Path) -> os.scandir[str]:
+        listed.append(folder)
+        return scandir(folder)
+
+    monkeypatch.setattr(os, "scandir", counted)
+    assert tree.stat("data/a.csv") == tree.stat("data/b.csv") == Entry("file")
+    assert tree.stat("data/c.csv") is None
+    assert sorted(listed) == [top, top / "data"]
+    (top / "data" / "c.csv").write_text("3\n")
+    assert tree.stat("data/c.csv") is None
+    assert WorktreeReader(top, Repository(top)).stat("data/c.csv") == Entry("file")

@@ -54,7 +54,7 @@ from astra._internal.sources.reader import CommitReader
 from astra._internal.sources.remote import Remotes
 from astra._internal.sources.standins import Found
 from astra.model.diagnostic import Diagnostic, Location
-from astra.model.provenance_record import ProvenanceRecord, RecordedInput
+from astra.model.provenance_record import ProvenanceRecord
 from astra.model.resolved_analysis import Result
 from astra.model.status_report import Bytes, EvidenceStatus, State, Status, StatusReport
 
@@ -360,13 +360,14 @@ class _Checker:
                         f"the content of `{source.entry}` can't be read at {path}: no file is "
                         "there, or only a stand-in that gives no SHA-256"
                     )
-                elif found != _digest(item):
+                elif found != hashing.recorded(item):
                     changes.append(
                         f"the content of `{source.entry}`, {path}, isn't what the recipe read"
                     )
                 continue
             status = statuses[source.result]
-            remade = status.record is not None and _digest(status.record) != _digest(item)
+            made = status.record
+            remade = made is not None and hashing.recorded(made) != hashing.recorded(item)
             if status.state != "unchanged" or remade:
                 stale.append(source.entry)
         return changes, stale
@@ -400,7 +401,7 @@ class _Checker:
         found, digest = self._look(member.identity, place.bytes)
         if record is None:  # no recorded bytes, so absent, but no ABSENT_RESULT
             return Bytes("absent", found.kept_by), ()
-        if digest == _digest(record):
+        if digest == hashing.recorded(record):
             return Bytes("present" if found.here else "absent", found.kept_by), ()
         if digest is None and found.standin is not None:
             # A stand-in that gives no hash is taken to stand for the recorded bytes.
@@ -483,11 +484,6 @@ def _worst(states: Iterable[State]) -> State:
     """The worst of `states`, `missing` then `stale`; `missing` where there are none."""
     found = set(states)
     return next((state for state in _WORST if state in found), "missing")
-
-
-def _digest(recorded: ProvenanceRecord | RecordedInput) -> hashing.Digest:
-    """The hash and size a record gives, of its result's bytes or of what an entry read."""
-    return hashing.Digest(recorded.content_hash, recorded.size)
 
 
 def _location(member: Member, path: str) -> Location:

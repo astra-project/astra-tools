@@ -20,7 +20,7 @@ from astra._internal.analysis.rules.context import Context
 from astra._internal.analysis.stack import Member
 from astra._internal.documents import document
 from astra._internal.sources import paths
-from astra._internal.sources.reader import Reader
+from astra._internal.sources.reader import Reader, analysis_below
 from astra._internal.sources.standins import StandIn, look, registered
 from astra.model.diagnostic import Diagnostic
 
@@ -102,12 +102,9 @@ def _elsewhere(reader: Reader, folder: str, path: str) -> str | None:
     is inside that folder and outside every folder below it holding an `astra.yaml` file."""
     if not paths.lies_inside(path, folder):
         return f"is outside this analysis's folder: {_ELSEWHERE}"
-    below = (path[len(folder) + 1 :] if folder else path).split("/")[:-1]
-    for count in range(1, len(below) + 1):
-        inner = posixpath.join(folder, *below[:count])
-        entry = reader.stat(posixpath.join(inner, "astra.yaml"))
-        if entry is not None and entry.kind == "file":
-            return f"is inside `{inner}`, which holds an analysis of its own: {_ELSEWHERE}"
+    inner = analysis_below(reader, folder, path[len(folder) + 1 :] if folder else path)
+    if inner is not None:
+        return f"is inside `{inner}`, which holds an analysis of its own: {_ELSEWHERE}"
     return None
 
 
