@@ -1,8 +1,8 @@
 """The `astra` command line. Each command is a module of its own, imported when
 it is run, which imports only click until then: `astra --help` loads no library.
 
-Exit codes: 0; 1 when `validate` finds an error, `check` a planned result that isn't
-`unchanged`, `info`, `view`, `check` and `history` an analysis that breaks a `MUST`, `history`
+Exit codes: 0; 1 when `validate` finds an error, `status` a planned result that isn't
+`unchanged`, `info`, `view`, `status` and `history` an analysis that breaks a `MUST`, `history`
 nothing in git of what it is asked for, a `paper` command a paper or a quote that isn't there,
 or `info` no analysis; 2 for a usage error, a broken environment or an internal error.
 """
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 COMMANDS = MappingProxyType(
     {
-        "check": "astra.cli.check",
+        "status": "astra.cli.status",
         "guide": "astra.cli.guide",
         "history": "astra.cli.history",
         "info": "astra.cli.info",

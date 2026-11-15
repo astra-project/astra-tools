@@ -153,8 +153,8 @@ def test_the_json_examples_are_what_the_functions_give(example: Path) -> None:
     assert json.loads(validated) == api.validate(example).to_json()
     (resolved,) = blocks(section(text, "## The resolved analysis"), "json")
     assert json.loads(resolved) == api.resolve(example).to_json()
-    (checked,) = blocks(section(text, "## The check report"), "json")
-    report = api.check(example).to_json()
+    (checked,) = blocks(section(text, "## The status report"), "json")
+    report = api.status(example).to_json()
     assert json.loads(checked) == {key: report[key] for key in ("statuses", "evidence")}
 
 
@@ -165,6 +165,6 @@ def test_the_runner_of_the_api_reference_builds_and_records(example: Path) -> No
     subprocess.run(
         [sys.executable, "-c", runner], cwd=example, env={**os.environ, "PATH": path}, check=True
     )
-    status = api.check(example).statuses["fit#baseline"]
+    status = api.status(example).statuses["fit#baseline"]
     assert (status.state, status.bytes) == ("unchanged", "present")
     assert status.record is not None and status.record.generated_by.runner.id == "example-runner"

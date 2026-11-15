@@ -9,7 +9,7 @@ reads them.
 - **PATH** is an analysis's folder, the current folder by default. Nothing is searched for: the
   analysis is the `astra.yaml` in that folder. `astra validate` and `astra info` name the
   analysis another way, each described below.
-- **A valid analysis.** `info`, `view`, `check` and `history` answer only for an analysis that
+- **A valid analysis.** `info`, `view`, `status` and `history` answer only for an analysis that
   breaks no `MUST`. For one that does, they print what `astra validate` prints, and exit 1.
 - **Exit codes:**
     - 0 when the command answers;
@@ -21,11 +21,11 @@ reads them.
   is a rule of the specification, listed under
   [Rules](https://astra-spec.org/0.1/specification/#rules), or one of astra-tools' own. The
   level is `error` for a `MUST` broken and `warning` for a `SHOULD`.
-- **JSON.** `validate`, `info` and `check` take `--json`, and print the
+- **JSON.** `validate`, `info` and `status` take `--json`, and print the
   [data model](data-model.md) as it writes: `validate` a
   [`ValidationReport`](data-model.md#validationreport), `info` a
-  [`ResolvedAnalysis`](data-model.md#resolvedanalysis), and `check` a
-  [`CheckReport`](data-model.md#checkreport). The paper commands that verify quotes print
+  [`ResolvedAnalysis`](data-model.md#resolvedanalysis), and `status` a
+  [`StatusReport`](data-model.md#statusreport). The paper commands that verify quotes print
   [`QuoteStatus`](data-model.md#quotestatus). The exit code is the same with and without
   `--json`.
 - **Colour** is left out where `NO_COLOR` is set, or where the output isn't a terminal.
@@ -68,7 +68,7 @@ universes:
 | [`astra validate`](#astra-validate) | Validate an analysis and its whole stack |
 | [`astra info`](#astra-info) | Show an analysis in brief |
 | [`astra view`](#astra-view) | Show the analysis as it is in one universe |
-| [`astra check`](#astra-check) | Check the records and bytes of the planned results |
+| [`astra status`](#astra-status) | Check the records and bytes of the planned results |
 | [`astra history`](#astra-history) | Show what git holds of a result's records over time |
 | [`astra spec`](#astra-spec) | Describe the fields of ASTRA files |
 | [`astra schema`](#astra-schema) | Show or export the LinkML schemas |
@@ -111,7 +111,7 @@ astra validate [FILE] [-e | --verify-evidence] [--skip-evidence] [--json] [--off
 ```
 
 Checks every parse, schema and validator rule over the whole stack: the analysis and every
-analysis it declares, each at its commit. It reads no results; `astra check` does. Exits 0 when
+analysis it declares, each at its commit. It reads no results; `astra status` does. Exits 0 when
 every analysis is valid and 1 when one breaks a `MUST`. A `SHOULD` that is broken is a warning,
 and doesn't change the exit code.
 
@@ -248,13 +248,14 @@ fit#baseline  results/baseline/fit.json
   $ python fit.py data/catalog.csv ols results/baseline/fit.json
 ```
 
-## `astra check`
+## `astra status`
 
 ```text
-astra check [PATH] [--at REV] [--json]
+astra status [PATH] [--at REV] [--json]
 ```
 
-Checks each planned result's record and bytes:
+Shows how each planned result stands, by the specification's check rules. For each one it
+checks the record and the bytes:
 
 - the record is `unchanged`, `stale` (something the result is made from has changed since the
   commit the record names) or `missing`;
@@ -267,10 +268,10 @@ rule it breaks. Then each evidence that cites an output gets the status of what 
 | Option | Meaning |
 |---|---|
 | `--at REV` | Check the analysis as it is at the commit REV names (a commit, a branch, a tag), with its records and bytes there. Exits 2 where REV names no commit |
-| `--json` | Print the [`CheckReport`](data-model.md#checkreport) as JSON, which holds the resolved analysis too |
+| `--json` | Print the [`StatusReport`](data-model.md#statusreport) as JSON, which holds the resolved analysis too |
 
 ```console
-$ astra check
+$ astra status
 fit#baseline  missing  absent  .astra/records/baseline/fit.json
   error MISSING_RECORD no record is at .astra/records/baseline/fit.json: build `fit#baseline`, and record it there
 1 planned result(s), 0 unchanged, 0 stale, 1 missing; 1 absent
@@ -290,7 +291,7 @@ astra history get ADDR@REV [PATH]
 ```
 
 Reads a result's records over time, from git. ADDR is a result's address, as its record gives it
-(`fit#baseline`, `summary`); `astra check` lists them. A record's versions are its file at each
+(`fit#baseline`, `summary`); `astra status` lists them. A record's versions are its file at each
 commit along HEAD's history that changed it, in the repository that holds the analysis the
 result belongs to. Exits 1 where what is asked for isn't in git, and 2 where ADDR names no
 planned result or REV names no commit.

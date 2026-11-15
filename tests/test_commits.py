@@ -346,7 +346,7 @@ def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path
     with pytest.raises(api.InvalidAnalysisError):
         read(root, Remotes(offline=True))  # what `astra history` reads
     with pytest.raises(api.InvalidAnalysisError) as raised:
-        api.check(root, offline=True)
+        api.status(root, offline=True)
     errors = [d.code for d in raised.value.report.diagnostics if d.level == "error"]
     assert errors == ["REMOTE_UNREACHABLE"]
     unreached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
@@ -360,7 +360,7 @@ def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path
         ("result", "result", None),
     ]
     assert resolved.analyses[1].commit == api.Commit(head, remote.as_uri())
-    assert list(api.check(root, offline=True).statuses) == ["up:result", "result"]
+    assert list(api.status(root, offline=True).statuses) == ["up:result", "result"]
     reached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
     assert reached is not None and len(list(reached.determined())) == 2
     offline = Remotes(offline=True)

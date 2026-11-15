@@ -9,7 +9,7 @@ a file for each thing a function returns, and those files hold nothing else.
 |---|---|---|
 | `validation_report.py` | [`ValidationReport`](#validationreport) | `validate` returns it |
 | `resolved_analysis.py` | [`ResolvedAnalysis`](#resolvedanalysis) and the classes it is made of | `resolve` returns it |
-| `check_report.py` | [`CheckReport`](#checkreport), [`Status`](#status), [`EvidenceStatus`](#evidencestatus) | `check` returns it |
+| `status_report.py` | [`StatusReport`](#statusreport), [`Status`](#status), [`EvidenceStatus`](#evidencestatus) | `status` returns it |
 | `provenance_record.py` | [`ProvenanceRecord`](#provenancerecord), [`Generation`](#generation) and its parts | a runner gives `write_records` a `Generation`; a `Status` holds the record |
 | `diagnostic.py` | [`Diagnostic`](#diagnostic), [`Location`](#location) | the reports hold them |
 | `paper.py` | [`Paper`](#paper), [`QuoteStatus`](#quotestatus) | the paper functions return them |
@@ -26,7 +26,7 @@ Every class is imported from `astra.api`.
 - **Each fact once.** What a reader gets by following a reference isn't repeated.
 - **One JSON form.** Each class writes as a JSON object that holds every field under its name.
   An optional field is left out where it has no value, and is never `null`. A list or a map is
-  always there, empty or not. `ValidationReport`, `ResolvedAnalysis` and `CheckReport` have a
+  always there, empty or not. `ValidationReport`, `ResolvedAnalysis` and `StatusReport` have a
   `to_json()` method that gives it.
 
 In the tables below, *optional* marks a field that can have no value.
@@ -44,7 +44,7 @@ classDiagram
   direction LR
   class ValidationReport
   class ResolvedAnalysis
-  class CheckReport
+  class StatusReport
   class Analysis
   class Result
   class Status
@@ -55,9 +55,9 @@ classDiagram
   ResolvedAnalysis *-- "1..*" Analysis : analyses
   ResolvedAnalysis *-- "*" Result : results
   ResolvedAnalysis *-- "*" Diagnostic : notes
-  CheckReport *-- "1" ResolvedAnalysis : analysis
-  CheckReport *-- "*" Status : statuses
-  CheckReport *-- "*" EvidenceStatus : evidence
+  StatusReport *-- "1" ResolvedAnalysis : analysis
+  StatusReport *-- "*" Status : statuses
+  StatusReport *-- "*" EvidenceStatus : evidence
   Status *-- "0..1" ProvenanceRecord : record
   Status *-- "*" Diagnostic : why
   EvidenceStatus *-- "*" Diagnostic : why
@@ -584,7 +584,7 @@ universes:
 }
 ```
 
-## The check report
+## The status report
 
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where
@@ -594,7 +594,7 @@ at its place hash to its record's, and `absent` otherwise.
 ```mermaid
 classDiagram
   direction LR
-  class CheckReport
+  class StatusReport
   class Status {
     state : unchanged, stale or missing
     bytes : present or absent [0..1]
@@ -609,16 +609,16 @@ classDiagram
   class ResolvedAnalysis
   class Diagnostic
   class Insight
-  CheckReport *-- "1" ResolvedAnalysis : analysis
-  CheckReport *-- "*" Status : statuses, by result id
-  CheckReport *-- "*" EvidenceStatus : evidence
+  StatusReport *-- "1" ResolvedAnalysis : analysis
+  StatusReport *-- "*" Status : statuses, by result id
+  StatusReport *-- "*" EvidenceStatus : evidence
   Status *-- "0..1" ProvenanceRecord : record
   Status *-- "*" Diagnostic : why
   EvidenceStatus *-- "*" Diagnostic : why
   EvidenceStatus o-- "1" Insight : insight
 ```
 
-### `CheckReport`
+### `StatusReport`
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -657,7 +657,7 @@ cites, and `missing` where it cites none.
 
 ### Example
 
-For the analysis above, before anything is built, `check` gives the resolved analysis as its
+For the analysis above, before anything is built, `status` gives the resolved analysis as its
 `analysis`, and beside it:
 
 ```json

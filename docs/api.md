@@ -14,8 +14,8 @@ they raise ([Errors](#errors)).
 |---|---|---|
 | [`validate`](#validate) | Says whether an analysis is valid | [`ValidationReport`](data-model.md#validationreport) |
 | [`resolve`](#resolve) | Says what an analysis means | [`ResolvedAnalysis`](data-model.md#resolvedanalysis) |
-| [`check`](#check) | Says whether its results' records still hold | [`CheckReport`](data-model.md#checkreport) |
-| [`create_boilerplate`](#create_boilerplate) | Writes a new analysis | nothing |
+| [`status`](#status) | Says how each of its results stands: whether its record still holds | [`StatusReport`](data-model.md#statusreport) |
+| [`init_analysis`](#init_analysis) | Makes a folder an analysis, where it isn't one | nothing |
 | [`write_records`](#write_records) | Writes a result's record at each of its places | nothing |
 | [`paper`](#paper) | Looks a paper up in the paper cache | [`Paper`](data-model.md#paper), or `None` |
 | [`add_paper`](#add_paper) | Puts a paper in the paper cache | [`Paper`](data-model.md#paper) |
@@ -27,7 +27,7 @@ business, and nothing here says it.
 
 ## Reading an analysis
 
-`validate`, `resolve` and `check` read an analysis the same way. `path` is the analysis's
+`validate`, `resolve` and `status` read an analysis the same way. `path` is the analysis's
 folder, the current folder by default, and it holds the analysis's `astra.yaml`: nothing is
 searched for. The analysis is read in the working tree of the git repository that holds it, and
 each analysis it declares is read with it, in the working tree or at its commit.
@@ -79,38 +79,48 @@ for result in analysis.results:
     print(result.id, result.places[0].bytes_path, result.command)
 ```
 
-## `check`
+## `status`
 
 ```python
-def check(path=None, *, at=None, offline=False) -> CheckReport
+def status(path=None, *, at=None, offline=False) -> StatusReport
 ```
 
-The checker's report: the analysis as it resolved, each planned result's
+How the analysis's results stand: the analysis as it resolved, each planned result's
 [`Status`](data-model.md#status), and the status of each evidence that cites an output. One
 call tells a runner both what the results are and how each stands.
 
+A result's status says whether its record still holds: whether anything the result is made
+from has changed since the commit the record names. This is what the specification calls
+checking, and its [check rules](https://astra-spec.org/0.1/specification/#rules) are the ones
+a status reports.
+
 With `at`, a revision of the repository that holds the analysis (a commit, a branch, a tag),
-the analysis is checked as it is at that commit, with its records and bytes read there.
+the analysis is read as it is at that commit, with its records and bytes read there.
 
 Raises [`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`, and
 [`RequestError`](#errors) where `at` names no commit.
 
 ```python
-report = api.check("my-analysis")
+report = api.status("my-analysis")
 for id, status in report.statuses.items():
     print(id, status.state, status.bytes, [broken.code for broken in status.why])
 ```
 
-## `create_boilerplate`
+## `init_analysis`
 
 ```python
-def create_boilerplate(directory) -> None
+def init_analysis(directory) -> None
 ```
 
-Writes a new analysis into `directory`: an `astra.yaml` with a `spec_version` and a label, and
-nothing declared. The folder is made if need be. Nothing else is written or looked at, so a
-tool scaffolds into a folder under its own conventions. An `astra.yaml` already there is written
-over: guard on its presence.
+Converges `directory` into an analysis. Where it has no `astra.yaml`, one is written with a
+`spec_version` and a label, and nothing declared. The folder is made if need be.
+
+It is idempotent: an `astra.yaml` already there is left exactly as it is. A second call changes
+nothing, and a folder that already holds an analysis is safe to pass.
+
+Nothing else is written or looked at, so a tool scaffolds into a folder under its own
+conventions. [`astra init`](cli.md#astra-init) calls it, and adds a `.gitignore` and a git
+repository.
 
 Raises `OSError` where the file can't be written.
 
@@ -236,7 +246,7 @@ def now() -> str:
 
 
 folder = Path(".")
-report = api.check(folder)
+report = api.status(folder)
 analysis = report.analysis
 analyses = {each.key: each for each in analysis.analyses}
 inputs = {each.ref: each for one in analysis.analyses for each in one.inputs}
@@ -271,10 +281,10 @@ for result in analysis.results:  # each comes after every result it reads
     api.write_records(folder, result, *digest(folder / result.places[0].bytes_path), generation)
 ```
 
-After it, `astra check` reads the record back:
+After it, `astra status` reads the record back:
 
 ```console
-$ astra check
+$ astra status
 fit#baseline  unchanged  present  .astra/records/baseline/fit.json
   made in urn:example:python-3.13 by example-runner 0.1.0
 1 planned result(s), 1 unchanged, 0 stale, 0 missing; 0 absent

@@ -182,7 +182,7 @@ class History:
         ]
         if not found:
             raise RequestError(
-                f"`{address}` is the address of no planned result: `astra check` lists them"
+                f"`{address}` is the address of no planned result: `astra status` lists them"
             )
         return min(found, key=lambda pair: pair[0].owner != self.stack.root)
 

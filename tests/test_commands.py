@@ -253,16 +253,32 @@ def test_init_check_writes_nothing_and_json_reports(tmp_path: Path) -> None:
     assert (done.exit_code, done.stdout) == (0, f"✓ {folder} is converged — nothing to do\n")
 
 
-def test_create_boilerplate_writes_an_empty_analysis_and_nothing_else(tmp_path: Path) -> None:
+def test_init_analysis_writes_an_empty_analysis_and_nothing_else(tmp_path: Path) -> None:
     """What `astra init` and downstream tools scaffold through: an astra.yaml, valid once its
     folder is in a repository, with no universes folder."""
-    from astra._internal.documents.scaffold import create_boilerplate
-
     top = git_init(tmp_path)
-    create_boilerplate(top / "stage")
+    api.init_analysis(top / "stage")
     assert [path.name for path in (top / "stage").iterdir()] == ["astra.yaml"]
     assert 'label: "stage"' in (top / "stage" / "astra.yaml").read_text()
     assert api.validate(top / "stage").diagnostics == ()
+
+
+def test_init_analysis_is_idempotent(tmp_path: Path) -> None:
+    """Called again it changes nothing, and it never writes over an analysis: not one a user
+    has edited, and not a link that leads nowhere."""
+    top = git_init(tmp_path)
+    api.init_analysis(top)
+    scaffold = (top / "astra.yaml").read_bytes()
+    api.init_analysis(top)
+    assert (top / "astra.yaml").read_bytes() == scaffold
+    (top / "astra.yaml").write_text(MINIMAL)
+    api.init_analysis(top)
+    assert (top / "astra.yaml").read_text() == MINIMAL
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "astra.yaml").symlink_to("nowhere.yaml")
+    api.init_analysis(linked)
+    assert (linked / "astra.yaml").is_symlink() and not (linked / "nowhere.yaml").exists()
 
 
 def test_init_inside_a_working_tree_makes_no_repository_through_the_cli(tmp_path: Path) -> None:

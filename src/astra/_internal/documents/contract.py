@@ -94,7 +94,7 @@ class Contract:
                 f"{version[1]}, and this astra-tools reads ASTRA 0.1 alone"
             )
             return (self._at(document, file, "UNSUPPORTED_SPEC_VERSION", message),)
-        return self._check("analysis", document, file)
+        return self._status("analysis", document, file)
 
     def check_record(self, document: Document, file: str) -> tuple[Diagnostic, ...]:
         """The schema layer's diagnostics for a record, by the schema its minor version picks:
@@ -104,14 +104,14 @@ class Contract:
             message = f"records begin at 0.1.0: {document.value['spec_version']} has no schema"
             return (self._at(document, file, "INVALID_RECORD", message),)
         later = version is not None and version[:2] > SUPPORTED
-        return self._check("provenance.open" if later else "provenance", document, file)
+        return self._status("provenance.open" if later else "provenance", document, file)
 
     def _at(self, document: Document, file: str, code: str, message: str) -> Diagnostic:
         line, column = document.position(["spec_version"]) or (None, None)
         location = Location(file, "/spec_version", line, column)
         return self.catalogue.diagnostic(code, message, location)
 
-    def _check(self, name: SchemaName, document: Document, file: str) -> tuple[Diagnostic, ...]:
+    def _status(self, name: SchemaName, document: Document, file: str) -> tuple[Diagnostic, ...]:
         schema = self.schemas[name]
         found = []
         for error in schema.validator.iter_errors(document.value):

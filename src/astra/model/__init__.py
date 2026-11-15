@@ -4,9 +4,9 @@ Definitions only, a file for each:
 
 - `validation_report`: `ValidationReport`, what `validate` returns;
 - `resolved_analysis`: `ResolvedAnalysis`, what `resolve` returns, and the classes it is made of;
-- `check_report`: `CheckReport`, what `check` returns;
+- `status_report`: `StatusReport`, what `status` returns;
 - `provenance_record`: `ProvenanceRecord`, a result's record, which a runner gives
-  `write_records` and a check report holds;
+  `write_records` and a status report holds;
 - `diagnostic`: `Diagnostic`, a rule broken and where, which the reports hold;
 - `paper`: `Paper` and `QuoteStatus`, what the paper functions return.
 

@@ -100,9 +100,9 @@ def test_the_api_gives_every_class_of_the_model_and_every_error() -> None:
     assert functions == {
         "validate",
         "resolve",
-        "check",
+        "status",
         "write_records",
-        "create_boilerplate",
+        "init_analysis",
         "paper",
         "add_paper",
         "verify_quote",

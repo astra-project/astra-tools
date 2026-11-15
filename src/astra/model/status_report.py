@@ -1,4 +1,4 @@
-"""The check report: how each planned result of an analysis stands, and its evidence.
+"""The status report: how each planned result of an analysis stands, and its evidence.
 
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where
@@ -47,7 +47,7 @@ class EvidenceStatus:
 
 
 @dataclass(frozen=True)
-class CheckReport:
+class StatusReport:
     """What checking an analysis found: the analysis as it resolved, each planned result's
     status by the result's id, and the status of each evidence that cites one."""
 

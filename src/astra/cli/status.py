@@ -1,4 +1,4 @@
-"""`astra check [PATH] [--at REV] [--json]`: each planned result's status, and the
+"""`astra status [PATH] [--at REV] [--json]`: each planned result's status, and the
 evidence's."""
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import click
 from astra.cli import FAILED, environment, write_json, write_report
 
 
-@click.command("check")
+@click.command("status")
 @click.argument("path", required=False, type=click.Path(file_okay=False, path_type=Path))
 @click.option(
     "--at",
@@ -33,7 +33,7 @@ def command(path: Path | None, at: str | None, as_json: bool) -> None:
 
     with environment():
         try:
-            report = api.check(path, at=at)
+            report = api.status(path, at=at)
         except api.InvalidAnalysisError as error:
             write_report(error.report, as_json)
             raise click.exceptions.Exit(FAILED) from None
@@ -42,7 +42,7 @@ def command(path: Path | None, at: str | None, as_json: bool) -> None:
     if as_json:
         write_json(report.to_json())
     else:
-        from astra.cli.text.check import show
+        from astra.cli.text.status import show
 
         show(report)
     states = [status.state for status in report.statuses.values()]

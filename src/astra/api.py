@@ -7,11 +7,11 @@ recipe, and each answered in plain data that writes as JSON (`astra.model`):
 - `resolve`: what does it mean, with every rule of the specification already applied
   (`ResolvedAnalysis`): its analyses and what they declare, each universe's selection, and its
   planned results, each with its places, what it reads and its command as it runs;
-- `check`: do its results' records still hold (`CheckReport`): the resolved analysis again, and
-  each result's status.
+- `status`: do its results' records still hold (`StatusReport`): the resolved analysis again,
+  and each result's status. It is what the specification's checker answers.
 
-What a tool writes: `create_boilerplate`, a new analysis, and `write_records`, a result's
-record at each of its places.
+What a tool writes: `init_analysis`, an empty analysis where a folder has none, and
+`write_records`, a result's record at each of its places.
 
 And, apart from any analysis, the papers that evidence cites: `paper` looks one up in the paper
 cache, `add_paper` puts one there and `verify_quote` seeks a quote in one. These aren't
@@ -31,8 +31,8 @@ from astra._internal.analysis.resolve import read as _read
 from astra._internal.analysis.validate import validate as _validate
 from astra._internal.documents import scaffold as _scaffold
 from astra._internal.papers import library as _library
-from astra._internal.results.check import check as _check
 from astra._internal.results.records import write_records
+from astra._internal.results.status import status as _status
 from astra._internal.sources.reader import worktree as _worktree
 from astra._internal.sources.remote import Remotes as _Remotes
 from astra.errors import (
@@ -43,7 +43,6 @@ from astra.errors import (
     PaperError,
     RequestError,
 )
-from astra.model.check_report import CheckReport, EvidenceStatus, Status
 from astra.model.diagnostic import Diagnostic, Location
 from astra.model.paper import Paper, QuoteStatus
 from astra.model.provenance_record import (
@@ -71,12 +70,12 @@ from astra.model.resolved_analysis import (
     TextQuoteSelector,
     Universe,
 )
+from astra.model.status_report import EvidenceStatus, Status, StatusReport
 from astra.model.validation_report import ValidationReport
 
 __all__ = [
     "Analysis",
     "CacheError",
-    "CheckReport",
     "Commit",
     "Decision",
     "Diagnostic",
@@ -106,14 +105,15 @@ __all__ = [
     "Runner",
     "Source",
     "Status",
+    "StatusReport",
     "TextQuoteSelector",
     "Universe",
     "ValidationReport",
     "add_paper",
-    "check",
-    "create_boilerplate",
+    "init_analysis",
     "paper",
     "resolve",
+    "status",
     "validate",
     "verify_quote",
     "write_records",
@@ -144,26 +144,29 @@ def resolve(
     return _read(path, _Remotes(offline=offline)).analysis
 
 
-def check(
+def status(
     path: str | os.PathLike[str] | None = None, *, at: str | None = None, offline: bool = False
-) -> CheckReport:
-    """The checker's report on the analysis whose folder is `path`, read as `validate` reads
-    it: the analysis as it resolved, each planned result's status, and its evidence's
-    (`astra.model.check_report`), so that one call tells a runner both what the results are and
-    how each stands. With `at`, a revision of the repository that holds the analysis (a commit,
-    a branch, a tag), the analysis is checked as it is at that commit, with its records and
-    bytes read there. Raises InvalidAnalysisError where the analysis breaks a `MUST`,
-    RequestError where `at` names no commit, and otherwise as `validate` does."""
+) -> StatusReport:
+    """The status of the analysis whose folder is `path`, read as `validate` reads it: the
+    analysis as it resolved, each planned result's status by the specification's check rules,
+    and its evidence's (`astra.model.status_report`), so that one call tells a runner both what
+    the results are and how each stands. With `at`, a revision of the repository that holds the
+    analysis (a commit, a branch, a tag), the analysis is read as it is at that commit, with its
+    records and bytes read there. Raises InvalidAnalysisError where the analysis breaks a
+    `MUST`, RequestError where `at` names no commit, and otherwise as `validate` does."""
     remotes = _Remotes(offline=offline)
-    return _check(_read(path, remotes, at), remotes)
+    return _status(_read(path, remotes, at), remotes)
 
 
-def create_boilerplate(directory: str | os.PathLike[str]) -> None:
-    """Write a new analysis into `directory`: an `astra.yaml` with a `spec_version` and a label
-    and nothing declared, the folder made if need be. Nothing else is written or looked at, so a
-    tool scaffolds into a folder under its own conventions; an `astra.yaml` already there is
-    written over. Raises OSError where the file can't be written."""
-    _scaffold.create_boilerplate(Path(directory))
+def init_analysis(directory: str | os.PathLike[str]) -> None:
+    """Converge `directory` into an analysis: where it has no `astra.yaml`, write one with a
+    `spec_version` and a label and nothing declared, the folder made if need be.
+
+    Idempotent: an `astra.yaml` already there is left exactly as it is, so a second call changes
+    nothing, and a folder that holds an analysis is safe to pass. Nothing else is written or
+    looked at, so a tool scaffolds into a folder under its own conventions; `astra init` adds a
+    `.gitignore` and a git repository. Raises OSError where the file can't be written."""
+    _scaffold.init_analysis(Path(directory))
 
 
 def paper(doi: str, *, version: int | None = None) -> Paper | None:

@@ -48,7 +48,7 @@ astra.yaml: valid, 0 error(s), 0 warning(s)
 
 `astra init` writes an empty `astra.yaml`, with a `spec_version` and a label, in a git
 repository; run again, it changes nothing. Once the analysis has outputs and universes,
-`astra view UNIVERSE` shows where each result goes in a universe, and `astra check` whether each
+`astra view UNIVERSE` shows where each result goes in a universe, and `astra status` whether each
 is built and current.
 [Getting started](https://astra-spec.org/0.1/getting-started/) goes further.
 
@@ -60,7 +60,7 @@ is built and current.
 | [`astra validate`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-validate) | Validate an analysis and its whole stack, or every analysis under the current folder |
 | [`astra info`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-info) | Show an analysis in brief |
 | [`astra view`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-view) | Show the analysis as it is in one universe |
-| [`astra check`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-check) | Check the records and bytes of the planned results |
+| [`astra status`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-status) | Check the records and bytes of the planned results |
 | [`astra history`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-history) | Show what git holds of a result's records over time |
 | [`astra spec`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-spec) | Describe the fields of ASTRA files |
 | [`astra schema`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-schema) | Show or export the LinkML schemas |
@@ -82,9 +82,9 @@ from astra import api
 
 api.validate(folder)            # is it valid: every rule it breaks, and where
 analysis = api.resolve(folder)  # what it means, with every rule of the specification applied
-report = api.check(folder)      # do the records still hold: the analysis again, and each status
+report = api.status(folder)     # how its results stand: the analysis again, and each status
 
-api.create_boilerplate(folder)  # a new analysis, with nothing declared yet
+api.init_analysis(folder)       # an empty analysis where the folder has none; safe to call again
 api.write_records(folder, result, content_hash, size, generated_by)
 
 api.paper(doi)                  # the paper of a DOI, in the paper cache
@@ -99,7 +99,7 @@ and not what they start from, so it has no switch, no `derived_from` and no temp
 fact once, so a reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`).
 
 That is what a runner builds on. It decides itself what to build, in what order and where. A
-check report gives it one status for each result: what the result itself breaks (`why`), and
+status report gives it one status for each result: what the result itself breaks (`why`), and
 which entries read a result that isn't unchanged (`stale_inputs`), so that it can tell, once it
 has rebuilt those, whether a result that only read them needs building too. What its run made it
 writes with `write_records`, a record at each of the result's places.
@@ -118,7 +118,7 @@ a file for each, and those files hold nothing else:
 |---|---|---|
 | `validation_report.py` | `ValidationReport` | `validate` returns it |
 | `resolved_analysis.py` | `ResolvedAnalysis`, and the classes it is made of: `Analysis`, `Input`, `Decision`, `Output`, `Insight`, `Universe`, `Result` and their parts | `resolve` returns it |
-| `check_report.py` | `CheckReport`, `Status`, `EvidenceStatus` | `check` returns it |
+| `status_report.py` | `StatusReport`, `Status`, `EvidenceStatus` | `status` returns it |
 | `provenance_record.py` | `ProvenanceRecord`, `Generation` and its parts | a runner gives `write_records` a `Generation`; a `Status` holds the record |
 | `diagnostic.py` | `Diagnostic`, `Location` | the reports hold them |
 | `paper.py` | `Paper`, `QuoteStatus` | the paper functions return them |
@@ -126,7 +126,7 @@ a file for each, and those files hold nothing else:
 Every class is a frozen dataclass that holds what JSON holds. Each writes as JSON by one rule:
 every field under its name, an optional one left out where it has no value, never null, and a
 list or a map always there. `astra validate --json`, `astra info --json` and
-`astra check --json` print the three reports exactly so.
+`astra status --json` print the three reports exactly so.
 
 ## Documentation
 

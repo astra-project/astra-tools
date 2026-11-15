@@ -27,7 +27,6 @@ def test_help_names_every_command() -> None:
     for name in COMMANDS:
         assert f"  {name} " in result.stdout
     assert set(COMMANDS) == {
-        "check",
         "guide",
         "history",
         "info",
@@ -35,6 +34,7 @@ def test_help_names_every_command() -> None:
         "paper",
         "schema",
         "spec",
+        "status",
         "validate",
         "view",
     }

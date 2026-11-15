@@ -9,7 +9,7 @@ It answers three questions of an analysis, from its files and git alone:
 |---|---|---|---|
 | Is it valid? | [`astra validate`](cli.md#astra-validate) | [`validate`](api.md#validate) | [`ValidationReport`](data-model.md#validationreport) |
 | What does it mean? | [`astra info`](cli.md#astra-info), [`astra view`](cli.md#astra-view) | [`resolve`](api.md#resolve) | [`ResolvedAnalysis`](data-model.md#resolvedanalysis) |
-| Do its results' records still hold? | [`astra check`](cli.md#astra-check) | [`check`](api.md#check) | [`CheckReport`](data-model.md#checkreport) |
+| Do its results' records still hold? | [`astra status`](cli.md#astra-status) | [`status`](api.md#status) | [`StatusReport`](data-model.md#statusreport) |
 
 Each answer is plain data that writes as JSON, and a command's `--json` prints exactly what the
 function returns.

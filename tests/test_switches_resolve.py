@@ -368,7 +368,7 @@ def test_an_output_built_in_none_of_the_roots_universes_has_no_result_to_give(
         "`reader` isn't built in `u1`: `gap` has no case there for `a`, the option its decision "
         "selects"
     )
-    report = api.check(top)
+    report = api.status(top)
     assert (dict(report.statuses), report.evidence) == ({}, ())
 
 
@@ -520,21 +520,21 @@ UNCHANGED = {
 }
 
 
-def statuses(report: api.CheckReport) -> dict[str, tuple[str, str | None]]:
+def statuses(report: api.StatusReport) -> dict[str, tuple[str, str | None]]:
     """Each result's id, and its record's and bytes' statuses."""
     return {id_: (status.state, status.bytes) for id_, status in report.statuses.items()}
 
 
-def broken(report: api.CheckReport, id_: str) -> list[tuple[str, str]]:
+def broken(report: api.StatusReport, id_: str) -> list[tuple[str, str]]:
     """Each rule the result `id_` itself breaks: its code, and its level."""
     return [(diagnostic.code, diagnostic.level) for diagnostic in report.statuses[id_].why]
 
 
-def messages(report: api.CheckReport, id_: str) -> list[str]:
+def messages(report: api.StatusReport, id_: str) -> list[str]:
     return [diagnostic.message for diagnostic in report.statuses[id_].why]
 
 
-def cited(report: api.CheckReport) -> dict[str, tuple[tuple[str, ...] | None, str]]:
+def cited(report: api.StatusReport) -> dict[str, tuple[tuple[str, ...] | None, str]]:
     """Each evidence of the driving analysis's findings that cites an output: the insight it
     backs, the results it cites, as the model gives them, and its status."""
     cites = {
@@ -561,7 +561,7 @@ def checked(committed: Path, tmp_path: Path) -> Path:
 
 
 def test_results_read_through_a_switch_are_unchanged_where_nothing_changed(checked: Path) -> None:
-    report = api.check(checked)
+    report = api.status(checked)
     assert statuses(report) == UNCHANGED
     assert [(e.insight, e.index, e.state, e.why) for e in report.evidence] == [
         ("findings.finding1", 0, "unchanged", ())
@@ -569,7 +569,7 @@ def test_results_read_through_a_switch_are_unchanged_where_nothing_changed(check
     assert all(
         status.why == () and status.stale_inputs == () for status in report.statuses.values()
     )
-    assert astra("check", str(checked)).exit_code == 0
+    assert astra("status", str(checked)).exit_code == 0
 
 
 def test_another_option_selected_for_a_switchs_decision_makes_its_reader_stale(
@@ -582,7 +582,7 @@ def test_another_option_selected_for_a_switchs_decision_makes_its_reader_stale(
     (checked / "astra.yaml").write_text(
         variant(CHECKED, ("{decision1: a}", "{decision1: b}")), "utf-8"
     )
-    report = api.check(checked)
+    report = api.status(checked)
     assert statuses(report) == {**UNCHANGED, "reader#u1": ("stale", "present")}
     assert broken(report, "reader#u1") == [("STALE_RESULT", "error")]
     (message,) = messages(report, "reader#u1")
@@ -599,7 +599,7 @@ def test_another_case_taken_makes_its_reader_stale(checked: Path) -> None:
     planned."""
     text = variant(CHECKED, ("{a: base, b: base, c: other}", "{a: other, b: base, c: other}"))
     (checked / "astra.yaml").write_text(text, "utf-8")
-    report = api.check(checked)
+    report = api.status(checked)
     assert statuses(report) == {
         "other": ("unchanged", "present"),
         "reader#u1": ("stale", "present"),
@@ -618,7 +618,7 @@ def test_a_result_read_through_a_switch_that_isnt_unchanged_makes_its_reader_sta
     gone, it is stale only through what it reads: by the entry as written, the switch's, and
     with no rule it breaks itself."""
     (checked / ".astra" / "records" / "other.json").unlink()
-    report = api.check(checked)
+    report = api.status(checked)
     assert statuses(report) == {
         **UNCHANGED,
         "other": ("missing", "absent"),
@@ -629,7 +629,7 @@ def test_a_result_read_through_a_switch_that_isnt_unchanged_makes_its_reader_sta
         (),
         ("sw",),
     )
-    assert astra("check", str(checked)).exit_code == 1
+    assert astra("status", str(checked)).exit_code == 1
 
 
 def test_evidence_citing_a_switch_cites_the_case_it_takes_in_each_universe(
@@ -638,10 +638,10 @@ def test_evidence_citing_a_switch_cites_the_case_it_takes_in_each_universe(
     """Results *Evidence*: citing a switch without a pin, it cites the result in each of the
     driving analysis's universes of the case the switch takes there, and gets the worst of
     their statuses."""
-    report = api.check(checked)
+    report = api.status(checked)
     assert cited(report) == {"findings.finding1": (("base", "other"), "unchanged")}
     (checked / ".astra" / "records" / "other.json").unlink()
-    report = api.check(checked)
+    report = api.status(checked)
     assert cited(report) == {"findings.finding1": (("base", "other"), "missing")}
     (evidence,) = report.evidence
     assert [(d.code, d.level, d.location.file, d.location.pointer) for d in evidence.why] == [
@@ -656,7 +656,7 @@ def test_evidence_citing_a_switch_that_takes_nothing_is_missing(checked: Path) -
         CHECKED, ("  reader:\n", "  gap:\n    switch: decision1\n    cases: {b: base}\n  reader:\n")
     ) + ("  finding2:\n    claim: The gap is cited.\n    evidence:\n      - artifact: gap\n")
     (checked / "astra.yaml").write_text(text, "utf-8")
-    report = api.check(checked)
+    report = api.status(checked)
     assert cited(report) == {
         "findings.finding1": (("base", "other"), "unchanged"),
         "findings.finding2": ((), "missing"),

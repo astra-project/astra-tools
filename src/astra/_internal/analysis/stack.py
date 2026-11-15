@@ -247,7 +247,7 @@ def bind(
     def read(place: _Place) -> Analysis | None:
         identity = place.identity
         file = posixpath.join(identity.folder, "astra.yaml")
-        document, found = _check(place.reader.read(file), file, contract, catalogue)
+        document, found = _status(place.reader.read(file), file, contract, catalogue)
         diagnostics.extend(
             replace(d, location=replace(d.location, commit=identity.commit, url=place.url))
             for d in found
@@ -288,7 +288,7 @@ def bind(
     return stack, tuple(diagnostics)
 
 
-def _check(
+def _status(
     data: bytes, file: str, contract: Contract, catalogue: Catalogue
 ) -> tuple[Document | None, tuple[Diagnostic, ...]]:
     """The document, and its parse and schema diagnostics: a file that can't be read is checked

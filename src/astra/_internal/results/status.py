@@ -1,4 +1,4 @@
-"""check(): each planned result's status, and the status of the evidence that cites one.
+"""status(): each planned result's status, and the status of the evidence that cites one.
 
 A checker reads records only through planned results, which the resolved analysis gives
 (`resolve.resolve`), each after what it reads. At each place of a result:
@@ -50,10 +50,10 @@ from astra._internal.sources import standins
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import CommitReader
 from astra._internal.sources.remote import Remotes
-from astra.model.check_report import Bytes, CheckReport, EvidenceStatus, State, Status
 from astra.model.diagnostic import Diagnostic, Location
 from astra.model.provenance_record import ProvenanceRecord, RecordedInput
 from astra.model.resolved_analysis import Result
+from astra.model.status_report import Bytes, EvidenceStatus, State, Status, StatusReport
 
 CODES = frozenset(
     {
@@ -72,7 +72,7 @@ _WORST: tuple[State, ...] = ("missing", "stale", "unchanged")
 """The states, the worst first."""
 
 
-def check(resolved: Resolved, remotes: Remotes | None = None) -> CheckReport:
+def status(resolved: Resolved, remotes: Remotes | None = None) -> StatusReport:
     """The status of every planned result of `resolved`, and of the root's evidence and each
     item of a declared analysis's evidence that cites a planned result, its records and bytes
     read where its stack is: in the working tree, or at the commit its root is read at. Commits
@@ -91,7 +91,7 @@ def check(resolved: Resolved, remotes: Remotes | None = None) -> CheckReport:
                 for place in places(context.stack, planned)
             ]
         )
-    return CheckReport(analysis, statuses, tuple(_evidence(resolved, statuses)))
+    return StatusReport(analysis, statuses, tuple(_evidence(resolved, statuses)))
 
 
 def _worst_of(each: list[Status]) -> Status:
