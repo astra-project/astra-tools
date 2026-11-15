@@ -24,14 +24,35 @@
           "type": "data",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "seed",
+              "target": "inputs.seed"
+            }
+          ]
         },
         {
           "ref": "outputs.comparison",
           "type": "report",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "shared",
+              "target": "outputs.shared"
+            },
+            {
+              "entry": "stage.fit",
+              "target": "stage.outputs.fit"
+            },
+            {
+              "entry": "stage.fit#local",
+              "target": "stage.outputs.fit",
+              "universe": "stage.universes.local"
+            }
+          ]
         }
       ],
       "prior_insights": [],
@@ -46,13 +67,35 @@
                 "stage.fit#baseline",
                 "stage.fit#alternate"
               ],
-              "artifact": "stage.fit"
+              "artifact": "stage.fit",
+              "bindings": [
+                {
+                  "universe": "universes.baseline",
+                  "output": "stage.outputs.fit",
+                  "target_universe": "universes.baseline",
+                  "result": "stage.fit#baseline"
+                },
+                {
+                  "universe": "universes.alternate",
+                  "output": "stage.outputs.fit",
+                  "target_universe": "universes.alternate",
+                  "result": "stage.fit#alternate"
+                }
+              ]
             },
             {
               "cites": [
                 "stage:fit#local"
               ],
-              "artifact": "stage.fit#local"
+              "artifact": "stage.fit#local",
+              "bindings": [
+                {
+                  "universe": "stage.universes.local",
+                  "output": "stage.outputs.fit",
+                  "target_universe": "stage.universes.local",
+                  "result": "stage:fit#local"
+                }
+              ]
             }
           ],
           "tags": []
@@ -73,7 +116,8 @@
           },
           "tags": []
         }
-      ]
+      ],
+      "switches": []
     },
     {
       "key": "stage",
@@ -109,6 +153,12 @@
           "tags": [],
           "decisions": [
             "stage.decisions.method"
+          ],
+          "inputs": [
+            {
+              "entry": "parent.shared",
+              "target": "outputs.shared"
+            }
           ]
         }
       ],
@@ -122,7 +172,8 @@
           },
           "tags": []
         }
-      ]
+      ],
+      "switches": []
     }
   ],
   "results": [

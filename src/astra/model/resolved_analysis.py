@@ -99,6 +99,24 @@ class Resources:
 
 
 @dataclass(frozen=True)
+class AuthoredReference:
+    """An authored dependency, before switches are evaluated; pins name canonical universes."""
+
+    entry: str
+    target: str
+    universe: str | None = None
+
+
+@dataclass(frozen=True)
+class Switch:
+    """An authored switch, including cases that no planned result reaches."""
+
+    ref: str
+    decision: str
+    cases: Mapping[str, AuthoredReference]
+
+
+@dataclass(frozen=True)
 class Output:
     """What an analysis declares it makes. A switch isn't one: where a file writes a switch, each
     result that reads it names what it reads there (`Result.inputs`)."""
@@ -111,6 +129,7 @@ class Output:
     tags: tuple[str, ...] = ()
     resources: Resources | None = None  # what its recipe asks for
     decisions: tuple[str, ...] = ()  # the decisions it is made with, by ref
+    inputs: tuple[AuthoredReference, ...] | None = None  # absent in older reports
 
 
 @dataclass(frozen=True)
@@ -131,6 +150,21 @@ class FragmentSelector:
 
 
 @dataclass(frozen=True)
+class EvidenceBinding:
+    """One evaluation of artifact evidence. No output means a switch took no case.
+
+    `universe` is the evaluation context (or the authored pin); absent means independent
+    of the selected universe. `target_universe` is the effective output's universe after
+    following switches and pins; absent for an output built once. A target need not be planned.
+    """
+
+    universe: str | None = None
+    output: str | None = None
+    target_universe: str | None = None
+    result: str | None = None
+
+
+@dataclass(frozen=True)
 class Evidence:
     """What a claim rests on: a work by DOI, or an artifact address and its cited results."""
 
@@ -142,6 +176,7 @@ class Evidence:
     location: FragmentSelector | None = None
     artifact: str | None = None  # the authored address, scoped to the insight's analysis;
     # retained even where no result is planned, including a switch or a universe pin
+    bindings: tuple[EvidenceBinding, ...] | None = None  # artifact evaluations; absent for DOI
 
 
 @dataclass(frozen=True)
@@ -189,6 +224,7 @@ class Analysis:
     prior_insights: tuple[Insight, ...] = ()
     findings: tuple[Insight, ...] = ()
     universes: tuple[Universe, ...] = ()
+    switches: tuple[Switch, ...] | None = None  # authored graph; absent in older reports
 
 
 @dataclass(frozen=True)

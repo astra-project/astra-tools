@@ -48,42 +48,59 @@
           "type": "data",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": []
         },
         {
           "ref": "outputs.stale",
           "type": "data",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": []
         },
         {
           "ref": "outputs.absent",
           "type": "data",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": []
         },
         {
           "ref": "outputs.missing",
           "type": "data",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": []
         },
         {
           "ref": "outputs.pipeline",
           "type": "report",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "chosen",
+              "target": "switches.chosen"
+            }
+          ]
         },
         {
           "ref": "outputs.summary",
           "type": "table",
           "format": "txt",
           "tags": [],
-          "decisions": []
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "pipeline#baseline",
+              "target": "outputs.pipeline",
+              "universe": "universes.baseline"
+            }
+          ]
         }
       ],
       "prior_insights": [],
@@ -98,17 +115,44 @@
                 "present",
                 "stale"
               ],
-              "artifact": "chosen"
+              "artifact": "chosen",
+              "bindings": [
+                {
+                  "universe": "universes.baseline",
+                  "output": "outputs.present",
+                  "result": "present"
+                },
+                {
+                  "universe": "universes.alternate",
+                  "output": "outputs.stale",
+                  "result": "stale"
+                }
+              ]
             },
             {
               "cites": [
                 "present"
               ],
-              "artifact": "chosen#baseline"
+              "artifact": "chosen#baseline",
+              "bindings": [
+                {
+                  "universe": "universes.baseline",
+                  "output": "outputs.present",
+                  "result": "present"
+                }
+              ]
             },
             {
               "cites": [],
-              "artifact": "dormant"
+              "artifact": "dormant",
+              "bindings": [
+                {
+                  "universe": "universes.baseline"
+                },
+                {
+                  "universe": "universes.alternate"
+                }
+              ]
             }
           ],
           "tags": []
@@ -130,6 +174,32 @@
             "decisions.route": "b"
           },
           "tags": []
+        }
+      ],
+      "switches": [
+        {
+          "ref": "switches.chosen",
+          "decision": "decisions.route",
+          "cases": {
+            "a": {
+              "entry": "present",
+              "target": "outputs.present"
+            },
+            "b": {
+              "entry": "stale",
+              "target": "outputs.stale"
+            }
+          }
+        },
+        {
+          "ref": "switches.dormant",
+          "decision": "decisions.cold",
+          "cases": {
+            "a": {
+              "entry": "present",
+              "target": "outputs.present"
+            }
+          }
         }
       ]
     }

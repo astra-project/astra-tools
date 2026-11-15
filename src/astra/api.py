@@ -53,9 +53,11 @@ from astra.model.provenance_record import (
 )
 from astra.model.resolved_analysis import (
     Analysis,
+    AuthoredReference,
     Commit,
     Decision,
     Evidence,
+    EvidenceBinding,
     FragmentSelector,
     Input,
     Insight,
@@ -66,6 +68,7 @@ from astra.model.resolved_analysis import (
     Resources,
     Result,
     Source,
+    Switch,
     TextQuoteSelector,
     Universe,
 )
@@ -74,6 +77,9 @@ from astra.model.validation_report import ValidationReport
 
 __all__ = [
     "Analysis",
+    "AuthoredReference",
+    "EvidenceBinding",
+    "Switch",
     "Bytes",
     "CacheError",
     "Commit",
