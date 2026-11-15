@@ -168,7 +168,10 @@ in `astra.yaml`, under one of three codes of astra-tools' own:
 | `EVIDENCE_PAPER_UNREADABLE` | The paper is in the cache, and its text can't be read |
 | `EVIDENCE_QUOTE_NOT_FOUND` | The quote isn't in the paper, or isn't on the page its `location` gives (`page=6`) |
 
-Evidence that cites an output has no paper to seek a quote in, and is counted as skipped.
+Each quote is sought as [`astra paper verify-quote`](#verifying-quotes) and
+[`api.verify_quote`](api.md#verify_quote) seek one: it is the same check. Evidence that cites
+an output has no paper to seek a quote in, and evidence with no quote nothing to seek: each is
+counted as skipped, and neither fails.
 
 ## `astra info`
 

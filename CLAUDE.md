@@ -29,7 +29,8 @@ src/astra/            # NO __init__.py (namespace package)
                       scaffold, spec_render
     analysis/         the stack and what it means: stack, universes, rules/, validate, resolve
     results/          records, hashing, content (where a file's bytes are), status, history
-    papers/           the paper cache, downloads, PDF text and quotes; library is what api offers
+    papers/           the paper cache, downloads and PDF text; library is what api offers, and
+                      the one way a quote is verified
 docs/                 the CLI, API and data-model reference, for Zensical (zensical.toml)
 ```
 

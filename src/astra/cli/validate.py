@@ -50,8 +50,9 @@ def command(
     nothing is fetched.
 
     Evidence verification (--verify-evidence) checks that quotes in prior_insights and
-    findings actually exist in the source papers. Papers must be cached first using 'astra
-    paper add'. Artifact-backed evidence is reported as SKIPPED.
+    findings actually exist in the source papers, as `astra paper verify-quote` checks one.
+    Papers must be cached first using 'astra paper add'. Evidence that cites an output, or
+    has no quote, is reported as skipped.
 
     A quote that isn't verified is an error of the report, as a broken rule is, at its place
     in astra.yaml: EVIDENCE_PAPER_MISSING where its paper isn't in the cache,
@@ -167,95 +168,69 @@ def _suggest(insights: dict[str, dict[str, Insight]]) -> None:
         click.echo("Run with --verify-evidence to verify quotes exist in papers.")
 
 
-def _evidence(insights: dict[str, Insight]) -> dict[str, dict[str, Any]]:
-    """Insights as the verification reads them: each evidence with its place in the insight as
-    its id, and the page its location gives, which the quote is sought on."""
-    from astra._internal.papers import library
-
-    shaped: dict[str, dict[str, Any]] = {}
-    for insight_id, insight in insights.items():
-        items = []
-        for index, item in enumerate(insight.evidence):
-            page = library.page(item.location)
-            quote = item.quote
-            items.append(
-                {
-                    "id": str(index),
-                    "doi": item.doi or "",
-                    "version": item.version,
-                    "artifact": item.artifact,
-                    "quote": None
-                    if quote is None
-                    else {"exact": quote.exact, "prefix": quote.prefix, "suffix": quote.suffix},
-                    "location": None if page is None else {"page": page},
-                }
-            )
-        shaped[insight_id] = {"id": insight_id, "evidence": items}
-    return shaped
-
-
 def _verify(stack: Stack) -> tuple[list[Diagnostic], list[str]]:
-    """Verify the quotes of the root's evidence against the cached papers. Gives an error for
-    each that isn't verified, at its place in the root's file, as a validation error is given:
-    `EVIDENCE_PAPER_MISSING` at the `doi` of one whose paper isn't in the cache,
-    `EVIDENCE_PAPER_UNREADABLE` where the paper's text can't be read, and
+    """Seek the quotes of the root's evidence in the cached papers, as `astra.api.verify_quote`
+    does. Gives an error for each that isn't found, at its place in the root's file, as a
+    validation error is given: `EVIDENCE_PAPER_MISSING` at the `doi` of one whose paper isn't
+    in the cache, `EVIDENCE_PAPER_UNREADABLE` where the paper's text can't be read, and
     `EVIDENCE_QUOTE_NOT_FOUND` at a `quote` that isn't in its paper, or isn't on the page its
-    `location` gives. And gives the lines that
-    sum up what was verified and skipped."""
-    from astra._internal.papers.cache import PaperCache
-    from astra._internal.papers.quotes import VerificationStatus, verify_all_insights
-    from astra._internal.papers.verified import VerificationCache
+    `location` gives. And gives the lines that sum up what was verified and skipped: evidence
+    that cites an output has no paper, and evidence with no quote nothing to seek."""
+    from astra import api
+    from astra._internal.papers import library
     from astra.model.diagnostic import Diagnostic
 
-    passed = (VerificationStatus.VERIFIED, VerificationStatus.CACHED)
     found: list[Diagnostic] = []
     summary: list[str] = []
     for label, insights in _insights(stack).items():
-        verified = cached = skipped = artifacts = failed = 0
-        outcome = verify_all_insights(_evidence(insights), PaperCache(), VerificationCache())
-        for insight_id, result in outcome.items():
-            for item in result.evidence_results:
-                if item.status in passed:
-                    verified += 1
-                    cached += item.status == VerificationStatus.CACHED
+        verified = artifacts = unquoted = failed = 0
+        for insight_id, insight in insights.items():
+            for index, item in enumerate(insight.evidence):
+                if item.doi is None:
+                    artifacts += 1
                     continue
-                if item.status == VerificationStatus.SKIPPED:
-                    skipped += 1
-                    artifacts += "Artifact quote verification" in item.message
+                if item.quote is None:
+                    unquoted += 1
                     continue
-                failed += 1
                 named = item.doi + ("" if item.version is None else f" version {item.version}")
-                add = f"astra paper add {item.doi}"
-                add += "" if item.version is None else f" --version {item.version}"
-                if item.status == VerificationStatus.NOT_FOUND:
-                    code, field = "EVIDENCE_QUOTE_NOT_FOUND", "quote"
-                    if "where its location places it" in item.message:
-                        detail = item.message.removeprefix("Quote not found ")
-                        message = f"the quote isn't found in the paper of {named} {detail}"
+                code, field = "EVIDENCE_QUOTE_NOT_FOUND", "quote"
+                try:
+                    status = api.verify_quote(
+                        item.doi, item.quote, version=item.version, location=item.location
+                    )
+                except api.PaperError as error:
+                    code, field, message = "EVIDENCE_PAPER_UNREADABLE", "doi", str(error)
+                else:
+                    if status.state == "found":
+                        verified += 1
+                        continue
+                    if status.state == "no_paper":
+                        add = f"astra paper add {item.doi}"
+                        add += "" if item.version is None else f" --version {item.version}"
+                        code, field = "EVIDENCE_PAPER_MISSING", "doi"
+                        message = (
+                            f"the paper of {named} isn't in the cache, so its quote isn't "
+                            f"verified: run `{add}`"
+                        )
+                    elif status.state == "elsewhere":
+                        message = (
+                            f"the quote isn't found in the paper of {named} on page "
+                            f"{library.page(item.location)}, where its location places it "
+                            f"(it is on page {status.page})"
+                        )
                     else:
                         message = (
                             f"the quote isn't found in the paper of {named}: copy it exactly "
                             "from the paper, and check the DOI and version"
                         )
-                elif "not in cache" in item.message:
-                    code, field = "EVIDENCE_PAPER_MISSING", "doi"
-                    message = (
-                        f"the paper of {named} isn't in the cache, so its quote isn't "
-                        f"verified: run `{add}`"
-                    )
-                else:
-                    code, field = "EVIDENCE_PAPER_UNREADABLE", "doi"
-                    message = f"the paper of {named} in the cache can't be read: {item.message}"
-                pointer = (label, insight_id, "evidence", int(item.evidence_id), field)
-                at = stack.location(stack.root, pointer)
+                failed += 1
+                at = stack.location(stack.root, (label, insight_id, "evidence", index, field))
                 found.append(Diagnostic(code, "error", message, at))
-        parts = [f"{verified}/{verified + skipped + failed} verified"]
-        if cached:
-            parts.append(f"{cached} from cache")
+        parts = [f"{verified}/{verified + artifacts + unquoted + failed} verified"]
         if artifacts:
             parts.append(f"{artifacts} SKIPPED (artifact)")
-        if skipped - artifacts:
-            parts.append(f"{skipped - artifacts} skipped")
+        if unquoted:
+            parts.append(f"{unquoted} skipped")
         if failed:
             parts.append(f"{failed} failed")
         summary.append(f"Evidence ({label}): " + ", ".join(parts))

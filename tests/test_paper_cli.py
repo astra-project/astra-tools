@@ -230,7 +230,7 @@ def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
 
 
 def test_a_wrong_quote_fails_every_time_it_is_verified(home: Path) -> None:
-    """A failure isn't taken from the verification cache as a success."""
+    """Each run seeks the quote again: nothing remembers an earlier answer."""
     source = home / "paper.pdf"
     source.write_bytes(pdf(TEXT))
     assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
@@ -257,6 +257,65 @@ def test_a_quote_is_sought_on_the_page_its_location_gives(home: Path) -> None:
     assert "on page 1, where its location places it (it is on page 2)" in wrong.stdout
     analysis(folder, text + "        location: {value: page=9}\n")
     beyond = astra("validate", str(folder), "-e")
-    assert beyond.exit_code == 1 and "the PDF has 2 page(s)" in beyond.stdout
+    assert beyond.exit_code == 1
+    assert "on page 9, where its location places it (it is on page 2)" in beyond.stdout
     analysis(folder, text + "        location: {value: page=2}\n")
     assert astra("validate", str(folder), "-e").exit_code == 0  # not the cached failure
+
+
+def test_validate_seeks_quotes_as_the_api_does(home: Path) -> None:
+    """`astra validate -e` and `api.verify_quote` are one check: each evidence's fields go
+    to the function as they are written, and its answer is the report's."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf("An unrelated first page of introduction.", TEXT))
+    api.add_paper(DOI, pdf=source)
+    quote = api.TextQuoteSelector("influence of outliers")
+    for location, state in (("page=2", "found"), ("page=1", "elsewhere")):
+        text = MINIMAL + INSIGHT.format(quote=quote.exact)
+        folder = analysis(
+            git_init(home / state), text + f"        location: {{value: {location}}}\n"
+        )
+        status = api.verify_quote(DOI, quote, location=api.FragmentSelector(location))
+        assert status.state == state
+        assert (astra("validate", str(folder), "-e").exit_code == 0) == (state == "found")
+
+
+FINDINGS = """\
+findings:
+  best:
+    claim: The result is best.
+    evidence:
+      - artifact: result
+      - doi: "10.9999/example"
+        quote:
+          exact: "influence of outliers"
+      - doi: "10.9999/example"
+"""
+
+
+def test_validate_verifies_findings_and_skips_what_has_no_quote_to_seek(home: Path) -> None:
+    """Findings are verified as prior insights are. Evidence that cites an output has no
+    paper, and evidence with no quote nothing to seek: each is counted, and neither fails."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf(TEXT))
+    api.add_paper(DOI, pdf=source)
+    folder = analysis(git_init(home / "repo"), MINIMAL + FINDINGS)
+    result = astra("validate", str(folder), "-e")
+    assert result.exit_code == 0, result.output
+    assert "Evidence (findings): 1/3 verified, 1 SKIPPED (artifact), 1 skipped" in result.stdout
+    hinted = astra("validate", str(folder))
+    assert "Run with --verify-evidence to verify quotes exist in papers." in hinted.stdout
+    assert "--verify-evidence" not in astra("validate", str(folder), "--skip-evidence").stdout
+    assert json.loads(astra("validate", str(folder), "-e", "--json").stdout)["diagnostics"] == []
+
+
+def test_validate_reports_a_paper_whose_text_cant_be_read(home: Path) -> None:
+    source = home / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\nnothing a PDF reader can make a page of\n")
+    api.add_paper(DOI, pdf=source)
+    folder = analysis(git_init(home / "repo"), MINIMAL + INSIGHT.format(quote="some quote"))
+    result = astra("validate", str(folder), "-e", "--json")
+    assert result.exit_code == 1
+    (diagnostic,) = json.loads(result.stdout)["diagnostics"]
+    assert diagnostic["code"] == "EVIDENCE_PAPER_UNREADABLE"
+    assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/doi"

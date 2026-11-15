@@ -56,8 +56,6 @@ ALLOWED = {
     "astra._internal.papers.download": (),
     "astra._internal.papers.library": (),
     "astra._internal.papers.pdf": ("rapidfuzz",),
-    "astra._internal.papers.quotes": ("rapidfuzz",),
-    "astra._internal.papers.verified": (),
     "astra._internal.results": (),
     "astra._internal.results.status": ("ruamel.yaml",),
     "astra._internal.results.content": (),
