@@ -32,7 +32,7 @@ from collections.abc import Iterator, Mapping
 
 from astra._internal.analysis.rules.context import Context
 from astra._internal.analysis.stack import Element, Identity, Resolution
-from astra._internal.analysis.universes import Chain, Selection, built, looping, own_keys, unlooped
+from astra._internal.analysis.universes import Chain, Selection, built, looping, unlooped
 from astra._internal.documents import document
 from astra.model.diagnostic import Diagnostic
 
@@ -56,7 +56,7 @@ def check(context: Context) -> Iterator[Diagnostic]:
             if universe.is_import:
                 continue
             element = Element(member.identity, "universe", id_)
-            own = own_keys(context.stack, element)
+            own = context.written[element]
             selection = context.selections[element]
             yield from _looping(context, own)
             yield from _duplicates(context, own, () if selection is None else selection.inherited)
