@@ -42,66 +42,30 @@ def paper_add(doi: str, version: int | None, pdf: Path | None) -> None:
         astra paper add 10.48550/arXiv.1706.03762 --version 7
         astra paper add 10.1234/example --pdf ./local_paper.pdf
     """
+    from astra import api
+    from astra.cli import FAILED, environment
     from astra.cli.text import console as _console
 
     console = _console()
-    from astra._internal.papers.cache import PaperCache
-    from astra._internal.papers.download import download_paper
-
-    cache = PaperCache()
-
-    # Check if already cached
-    if cache.has(doi, version):
-        paper = cache.get(doi, version)
-        if paper:
+    with environment():
+        paper = api.paper(doi, version=version)
+        if paper is not None:
             console.print(f"[yellow]Paper already cached:[/yellow] {doi}")
-            console.print(f"  Path: {paper.pdf_path}")
-            if paper.metadata.title:
-                console.print(f"  Title: {paper.metadata.title}")
-            return
-
-    # Add from local file or download
-    if pdf:
-        console.print(f"Adding paper from local file: [cyan]{pdf}[/cyan]")
-        paper = cache.add_from_file(doi, pdf, version=version)
-        console.print("[green]✓[/green] Paper added to cache")
-        console.print(f"  DOI: {doi}")
-        if version:
-            console.print(f"  Version: {version}")
-        console.print(f"  Path: {paper.pdf_path}")
-        console.print(f"  SHA-256: {paper.metadata.sha256[:16]}...")
-    else:
-        console.print(f"Downloading paper: [cyan]{doi}[/cyan]")
-        if version:
-            console.print(f"  Version: {version}")
-
-        result = download_paper(doi, version)
-
-        if not result.success:
-            console.print(f"[red]Error:[/red] {result.error}")
-            raise SystemExit(1)
-
-        if result.content is None:
-            console.print("[red]Error:[/red] No content received")
-            raise SystemExit(1)
-
-        paper = cache.add(
-            doi=doi,
-            pdf_content=result.content,
-            version=version,
-            title=result.title,
-            authors=result.authors,
-            source_url=result.url,
-        )
-
-        console.print("[green]✓[/green] Paper downloaded and cached")
-        console.print(f"  DOI: {doi}")
-        if version:
-            console.print(f"  Version: {version}")
-        if paper.metadata.title:
-            console.print(f"  Title: {paper.metadata.title}")
-        console.print(f"  Path: {paper.pdf_path}")
-        console.print(f"  SHA-256: {paper.metadata.sha256[:16]}...")
+        else:
+            if pdf is None:
+                console.print(f"Downloading paper: [cyan]{doi}[/cyan]")
+            try:
+                paper = api.add_paper(doi, version=version, pdf=pdf)
+            except api.PaperError as error:
+                console.print(f"[red]Error:[/red] {error}")
+                raise click.exceptions.Exit(FAILED) from None
+            console.print("[green]✓[/green] Paper added to cache")
+    if paper.version:
+        console.print(f"  Version: {paper.version}")
+    if paper.title:
+        console.print(f"  Title: {paper.title}")
+    console.print(f"  Path: {paper.pdf_path}")
+    console.print(f"  SHA-256: {paper.content_hash.removeprefix('sha256:')}")
 
 
 @command.command("list")

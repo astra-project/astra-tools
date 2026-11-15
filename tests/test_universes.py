@@ -18,7 +18,7 @@ from astra import api
 from astra._internal.analysis import rules
 from astra._internal.analysis.rules.context import Context
 from astra._internal.analysis.stack import Element, Identity, bind
-from astra._internal.analysis.universes import Selection, selections
+from astra._internal.analysis.universes import Selection, selections, written
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import WorktreeReader
@@ -153,7 +153,7 @@ def effective(top: Path) -> Mapping[Element, Selection | None]:
     """Every universe's effective selection, in the stack whose root is `top`."""
     stack = bind(WorktreeReader(top, Repository(top)), "")[0]
     assert stack is not None
-    return selections(stack)
+    return selections(stack, written(stack))
 
 
 @pytest.fixture(scope="module")

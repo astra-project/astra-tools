@@ -17,7 +17,7 @@ import errno
 import os
 import posixpath
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Protocol
@@ -82,12 +82,28 @@ def in_repository(reader: Reader, folder: str, path: str) -> tuple[Repository, s
     return repo, posixpath.join(inner, posixpath.relpath(path, folder or "."))
 
 
+def analysis_below(reader: Reader, folder: str, path: str) -> str | None:
+    """The folder below `folder`, on the way to `path`, a tidied path from it, that holds an
+    `astra.yaml` file of its own, the outermost; None where none does."""
+    parts = path.split("/")[:-1]
+    for count in range(1, len(parts) + 1):
+        inner = posixpath.join(folder, *parts[:count])
+        entry = reader.stat(posixpath.join(inner, "astra.yaml"))
+        if entry is not None and entry.kind == "file":
+            return inner
+    return None
+
+
 @dataclass(frozen=True)
 class WorktreeReader:
-    """The working tree, on disk: the root, and analyses reached by `path` alone."""
+    """The working tree, on disk: the root, and analyses reached by `path` alone. A reader
+    lists each folder once, so it reads the tree as it is while one question is answered."""
 
     top: Path  # the top of the repository's working tree, or the analysis's folder without one
     repo: Repository | None
+    _listed: dict[str, dict[str, Kind] | None] = field(
+        init=False, default_factory=dict, compare=False, repr=False
+    )
 
     def read(self, path: str, limit: int | None = None) -> bytes:
         with open(self.top / path, "rb") as file:
@@ -138,6 +154,11 @@ class WorktreeReader:
     def _entries(self, folder: str) -> dict[str, Kind] | None:
         """The kind of each entry of `folder`, by name; None where `folder` names no folder or
         gitlink, or goes through a symlink."""
+        if folder not in self._listed:
+            self._listed[folder] = self._scan(folder)
+        return self._listed[folder]
+
+    def _scan(self, folder: str) -> dict[str, Kind] | None:
         found = self.stat(folder) if folder else Entry("folder")
         if found is None or found.kind not in ("folder", "gitlink"):
             return None

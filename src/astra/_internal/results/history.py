@@ -28,13 +28,13 @@ from astra._internal.analysis.stack import Identity
 from astra._internal.analysis.universes import Place, Planned, places
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.documents.contract import Contract
-from astra._internal.results.hashing import Digest, digest_bytes
+from astra._internal.results.hashing import Digest, digest_bytes, recorded
 from astra._internal.results.records import read_record
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import CommitReader, in_repository
 from astra._internal.sources.remote import Remotes
 from astra.model.diagnostic import Diagnostic
-from astra.model.provenance_record import ProvenanceRecord, RecordedInput
+from astra.model.provenance_record import ProvenanceRecord
 
 
 class RequestError(ValueError):
@@ -167,7 +167,7 @@ class History:
                 f"{commit} holds no file at {place.bytes}: its bytes aren't in git there"
             )
         data = reader.read(bytes_)
-        if digest_bytes(data) != _digest(record):
+        if digest_bytes(data) != recorded(record):
             raise NotInHistoryError(
                 f"the bytes at {place.bytes} in {commit} aren't the ones its record there gives"
             )
@@ -224,13 +224,13 @@ class History:
             through = today.get(item.entry)
             if through is None or through.target.kind == "input":
                 path = None if through is None else input_path(self.stack, through.target)
-                links.append(Link(item.entry, _digest(item), path, None, None, ()))
+                links.append(Link(item.entry, recorded(item), path, None, None, ()))
                 continue
             read = self.context.building.planned[through.target, through.universe]
             place = places(self.stack, read)[0]
-            made = self._made(read, place, _digest(item), result, version)
+            made = self._made(read, place, recorded(item), result, version)
             below = () if made is None else self._inputs(read, made)
-            links.append(Link(item.entry, _digest(item), None, place, made, below))
+            links.append(Link(item.entry, recorded(item), None, place, made, below))
         return tuple(links)
 
     def _users(self, result: Planned) -> tuple[Use, ...]:
@@ -250,8 +250,8 @@ class History:
                         continue
                     for item in record.generated_by.inputs:
                         if item.entry == entry.written:
-                            made = self._made(result, place, _digest(item), user, versions[0])
-                            uses.append(Use(versions[0], item.entry, _digest(item), made))
+                            made = self._made(result, place, recorded(item), user, versions[0])
+                            uses.append(Use(versions[0], item.entry, recorded(item), made))
         return tuple(uses)
 
     def _made(
@@ -270,7 +270,7 @@ class History:
                 version
                 for version in self._versions(result, place)
                 if isinstance(version.record, ProvenanceRecord)
-                and _digest(version.record) == digest
+                and recorded(version.record) == digest
                 and (not bounded or repo.is_ancestor(version.commit, listed.commit))
             ),
             None,
@@ -285,7 +285,3 @@ class History:
         of the tree that analysis is read in, as a path from that repository's top."""
         member = self.stack.analyses[result.owner]
         return in_repository(member.reader, result.owner.folder, path)
-
-
-def _digest(recorded: ProvenanceRecord | RecordedInput) -> Digest:
-    return Digest(recorded.content_hash, recorded.size)

@@ -19,6 +19,7 @@ from pathlib import Path
 from astra._internal.sources import cache
 from astra._internal.sources.reader import Reader, WorktreeReader
 from astra._internal.sources.standins import Found
+from astra.model.provenance_record import ProvenanceRecord, RecordedInput
 
 NAMESPACE = "hashes"
 """The cache's namespace of file hashes (`cache.NAMESPACES`)."""
@@ -34,6 +35,11 @@ class Digest:
 
     content_hash: str
     size: int
+
+
+def recorded(record: ProvenanceRecord | RecordedInput) -> Digest:
+    """The hash and size a record gives, of its result's bytes or of what an entry read."""
+    return Digest(record.content_hash, record.size)
 
 
 def digest_bytes(data: bytes) -> Digest:

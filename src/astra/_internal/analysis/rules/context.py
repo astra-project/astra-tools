@@ -51,7 +51,7 @@ class Context:
     @cached_property
     def selections(self) -> Mapping[Element, Selection | None]:
         """Every universe's effective selection, None where it has none."""
-        return universes.selections(self.stack)
+        return universes.selections(self.stack, self.written)
 
     @cached_property
     def imports(self) -> Mapping[tuple[Identity, str], Element | None]:
@@ -80,7 +80,7 @@ class Context:
 
     @cached_property
     def written(self) -> Mapping[Element, tuple[Resolution, ...]]:
-        """The addresses each decision, output and switch writes."""
+        """The addresses each decision, output, switch and universe writes."""
         return universes.written(self.stack)
 
     @cached_property

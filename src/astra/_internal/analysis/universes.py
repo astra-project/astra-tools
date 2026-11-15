@@ -4,7 +4,7 @@ in it, and what is driven (Elements, Results).
 Pure functions of a Stack, each of which `rules.Context` computes once:
 
 - `selections`: every universe's effective selection;
-- `written`: the addresses each decision, output and switch writes;
+- `written`: the addresses each decision, output, switch and universe writes;
 - `imports` and `pins`: the universe each import and each pin names;
 - `per_universe`: the outputs built per universe, every other output but a switch being built
   once (Elements *built per universe*);
@@ -77,15 +77,6 @@ def names_option(stack: Stack, resolution: Resolution) -> bool:
     return decision is not None and resolution.option in options(stack, decision)
 
 
-def own_keys(stack: Stack, universe: Element) -> tuple[Resolution, ...]:
-    """The keys of `universe`'s own `decisions`, each resolved where it is written."""
-    return tuple(
-        resolution
-        for resolution in stack.resolutions
-        if resolution.field == "selection" and resolution.owner == universe
-    )
-
-
 def own_universes(stack: Stack, analysis: Identity) -> tuple[Element, ...]:
     """`analysis`'s universes, in its file's order, without its imports, which select nothing."""
     return tuple(
@@ -98,21 +89,25 @@ def own_universes(stack: Stack, analysis: Identity) -> tuple[Element, ...]:
 # --- effective selections ---
 
 
-def selections(stack: Stack) -> Mapping[Element, Selection | None]:
+def selections(
+    stack: Stack, written: Mapping[Element, tuple[Resolution, ...]]
+) -> Mapping[Element, Selection | None]:
     """The effective selection of every universe of every analysis of the stack, a driven
-    analysis's own included; None for a universe that has none."""
+    analysis's own included, from the keys each sets itself (`written`); None for a universe
+    that has none."""
     found: dict[Element, Selection | None] = {}
     for member, analysis in stack.determined():
         for id_, universe in analysis.universes.items():
             if not universe.is_import:
                 element = Element(member.identity, "universe", id_)
-                effective_selection(stack, element, found)
+                effective_selection(stack, element, written, found)
     return MappingProxyType(found)
 
 
 def effective_selection(
     stack: Stack,
     universe: Element,
+    written: Mapping[Element, tuple[Resolution, ...]],
     found: dict[Element, Selection | None],
     deriving: tuple[Element, ...] = (),
 ) -> Selection | None:
@@ -124,7 +119,7 @@ def effective_selection(
     if universe in found:
         return found[universe]
     analysis = stack.analysis(universe.analysis)
-    own = own_keys(stack, universe)
+    own = written[universe]
     named = analysis.universes[universe.id].derived_from
     result: Selection | None = None
     if named is None:  # step 1
@@ -133,7 +128,7 @@ def effective_selection(
         parent = Element(universe.analysis, "universe", named)
         entry = analysis.universes.get(named)
         if entry is not None and not entry.is_import and parent not in (*deriving, universe):
-            inherited = effective_selection(stack, parent, found, (*deriving, universe))
+            inherited = effective_selection(stack, parent, written, found, (*deriving, universe))
             if inherited is not None:
                 result = _derive(universe, own, inherited.entries)
     found[universe] = result
@@ -159,9 +154,10 @@ def _one_key(inherited: Resolution, own: Resolution) -> bool:
 
 
 def written(stack: Stack) -> Mapping[Element, tuple[Resolution, ...]]:
-    """The addresses each decision, output and switch of the stack's valid files writes, () for
-    none: an output's `inputs` and `decisions`; a switch's `switch` and cases (Elements
-    *switch*); a decision's options' constraints."""
+    """The addresses each decision, output, switch and universe of the stack's valid files
+    writes, () for none: an output's `inputs` and `decisions`; a switch's `switch` and cases
+    (Elements *switch*); a decision's options' constraints; the keys of a universe's own
+    `decisions`."""
     found: dict[Element, list[Resolution]] = {}
     for member, analysis in stack.determined():
         for id_ in analysis.decisions:
@@ -169,10 +165,11 @@ def written(stack: Stack) -> Mapping[Element, tuple[Resolution, ...]]:
         for id_, output in analysis.outputs.items():
             kind: Kind = "switch" if output.is_switch else "output"
             found[Element(member.identity, kind, id_)] = []
+        for universe in own_universes(stack, member.identity):
+            found[universe] = []
     for resolution in stack.resolutions:
-        owner = resolution.owner
-        if owner is not None and owner.kind in ("output", "switch", "decision"):
-            found[owner].append(resolution)
+        if resolution.owner in found:
+            found[resolution.owner].append(resolution)
     return MappingProxyType({element: tuple(entries) for element, entries in found.items()})
 
 
