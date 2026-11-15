@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from astra.sources.git import Repository
-from astra.sources.reader import CommitReader, Entry
-from astra.sources.remote import Remotes, resolve
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import CommitReader, Entry
+from astra._internal.sources.remote import Remotes, resolve
 from tests.conftest import git, repository
 
 

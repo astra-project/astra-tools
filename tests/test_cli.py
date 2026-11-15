@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
-from astra import validate
+from astra import api
+from astra._internal.analysis import validate
+from astra._internal.documents.catalogue import Catalogue
 from astra.cli import COMMANDS, main
-from astra.diagnostics import Catalogue
 from tests.conftest import MINIMAL, analysis, git_init
 
 
@@ -26,7 +27,6 @@ def test_help_names_every_command() -> None:
     for name in COMMANDS:
         assert f"  {name} " in result.stdout
     assert set(COMMANDS) == {
-        "check",
         "guide",
         "history",
         "info",
@@ -34,6 +34,7 @@ def test_help_names_every_command() -> None:
         "paper",
         "schema",
         "spec",
+        "status",
         "validate",
         "view",
     }
@@ -68,33 +69,24 @@ def test_validate_respects_no_color(tmp_path: Path) -> None:
     assert "31m" not in plain.stdout
 
 
-def test_validate_json_is_the_reports_whether_a_file_is_given_or_not(
-    tmp_path: Path, outside: Path
-) -> None:
-    """`astra-validation-reports/1`, with no ANSI escape, colour forced or not; the exit code
-    still carries pass or fail."""
-    result = astra("validate", str(analysis(outside)), "--json", env={"FORCE_COLOR": "1"})
+def test_validate_json_of_a_file_is_its_validation_report(tmp_path: Path, outside: Path) -> None:
+    """The report as `api.validate` gives it, with no ANSI escape, colour forced or not; the
+    exit code still carries pass or fail."""
+    folder = analysis(outside)
+    result = astra("validate", str(folder), "--json", env={"FORCE_COLOR": "1"})
     assert result.exit_code == 1
     assert "\x1b" not in result.stdout
-    document = json.loads(result.stdout)
-    assert (document["shape"], document["valid"]) == ("astra-validation-reports/1", False)
-    (report,) = document["reports"]
-    assert (report["shape"], report["valid"]) == ("astra-validation-report/1", False)
+    report = json.loads(result.stdout)
+    assert report == api.validate(folder).to_json()
+    assert report["valid"] is False
     assert [d["code"] for d in report["diagnostics"]] == ["NOT_IN_REPOSITORY"]
     result = astra("validate", str(analysis(git_init(tmp_path / "repo")) / "astra.yaml"), "--json")
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {
-        "shape": "astra-validation-reports/1",
+        "root": "astra.yaml",
         "valid": True,
-        "reports": [
-            {
-                "shape": "astra-validation-report/1",
-                "root": "astra.yaml",
-                "valid": True,
-                "diagnostics": [],
-                "unchecked": [],
-            }
-        ],
+        "diagnostics": [],
+        "unchecked": [],
     }
 
 
@@ -128,16 +120,15 @@ def test_validate_with_no_file_validates_every_root_analysis_here(
     monkeypatch.chdir(top / "one")
     result = astra("validate", "--json")
     assert result.exit_code == 0
-    document = json.loads(result.stdout)
-    assert (document["shape"], document["valid"]) == ("astra-validation-reports/1", True)
-    assert [report["shape"] for report in document["reports"]] == ["astra-validation-report/1"]
+    # With no FILE, a list: the report of each root analysis.
+    assert json.loads(result.stdout) == [api.validate(top / "one").to_json()]
     monkeypatch.chdir(top)
-    document = json.loads(astra("validate", "--json").stdout)
-    assert [(r["root"], r["valid"]) for r in document["reports"]] == [
+    result = astra("validate", "--json")
+    assert result.exit_code == 1
+    assert [(r["root"], r["valid"]) for r in json.loads(result.stdout)] == [
         ("one/astra.yaml", True),
         ("two/astra.yaml", False),
     ]
-    assert document["valid"] is False
 
 
 def test_validate_with_no_file_and_no_analysis_here_exits_1(
@@ -166,13 +157,11 @@ def test_validate_exits_2_where_there_is_no_analysis(tmp_path: Path) -> None:
 
 
 def test_an_internal_error_exits_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from astra import api
-
-    def broken(path: object, **options: object) -> None:
+    def broken(*args: object) -> None:
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(api, "validate", broken)
-    result = astra("validate", str(tmp_path))
+    monkeypatch.setattr(validate, "validated", broken)
+    result = astra("validate", str(analysis(git_init(tmp_path))))
     assert result.exit_code == 2
     assert "internal error: RuntimeError: broken" in result.stderr
 

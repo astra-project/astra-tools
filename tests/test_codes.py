@@ -16,8 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from astra import api, validate
-from astra.diagnostics import Catalogue
+from astra import api
+from astra._internal.analysis import validate
+from astra._internal.documents.catalogue import Catalogue
 from tests.conftest import MINIMAL, git, repository
 
 OUTPUT = """\

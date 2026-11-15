@@ -14,6 +14,11 @@ import pytest
 from click.testing import CliRunner
 
 from astra import api
+from astra._internal.analysis.resolve import read
+from astra._internal.analysis.stack import bind
+from astra._internal.results.history import History
+from astra._internal.sources.reader import worktree
+from astra._internal.sources.remote import Remotes
 from astra.cli import main
 from tests.conftest import MINIMAL, git, repository
 
@@ -328,6 +333,40 @@ def test_a_commit_kept_from_an_earlier_fetch_counts_as_got(tmp_path: Path) -> No
     assert runner.invoke(main, ["validate", str(root), "--offline"]).exit_code == 0
 
 
+def test_offline_no_question_of_an_analysis_fetches_from_a_remote(tmp_path: Path) -> None:
+    """`offline`, `resolve`, `check`, binding and the history fetch nothing, as `validate`: a
+    remote's commit that was never got leaves the analysis invalid, and one kept from an earlier
+    fetch is read, though the remote is gone."""
+    remote = repository(tmp_path / "remote", {"astra.yaml": MINIMAL})
+    head = git(remote, "rev-parse", "HEAD").strip()
+    text = declaring(f"{{up: {{url: '{remote.as_uri()}', commit: '{head}'}}}}", "[up.result]")
+    root = repository(tmp_path / "root", {"astra.yaml": text})
+    with pytest.raises(api.InvalidAnalysisError):
+        api.resolve(root, offline=True)
+    with pytest.raises(api.InvalidAnalysisError):
+        read(root, Remotes(offline=True))  # what `astra history` reads
+    with pytest.raises(api.InvalidAnalysisError) as raised:
+        api.status(root, offline=True)
+    errors = [d.code for d in raised.value.report.diagnostics if d.level == "error"]
+    assert errors == ["REMOTE_UNREACHABLE"]
+    unreached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
+    assert unreached is not None and len(list(unreached.determined())) == 1
+    assert len(api.resolve(root).results) == 2  # fetched
+    remote.rename(tmp_path / "gone")
+    resolved = api.resolve(root, offline=True)
+    # `up`'s result is a result from a commit, and the root's reads it there.
+    assert [(r.id, r.places[0].address, r.command) for r in resolved.results] == [
+        ("up:result", "result", None),
+        ("result", "result", None),
+    ]
+    assert resolved.analyses[1].commit == api.Commit(head, remote.as_uri())
+    assert list(api.status(root, offline=True).statuses) == ["up:result", "result"]
+    reached = bind(*worktree(root), remotes=Remotes(offline=True))[0]
+    assert reached is not None and len(list(reached.determined())) == 2
+    offline = Remotes(offline=True)
+    assert History(read(root, offline), offline).timeline("result") == ()
+
+
 def test_a_commit_further_in_is_reported_on_the_outermost_declaration(tmp_path: Path) -> None:
     """The root declares `stage` by path, `stage` declares `upstream` by url, and `upstream`
     declares `nested` by url, whose commit can't be got: the error is on `stage`'s declaration
@@ -363,8 +402,8 @@ def test_the_cli_shows_a_commits_file_with_its_commit(
     assert result.exit_code == 1
     assert f"astra.yaml at {commit} from {url}\n" in result.stdout
     result = CliRunner().invoke(main, ["validate", str(root), "--json"], prog_name="astra")
-    locations = [d["location"] for d in json.loads(result.stdout)["reports"][0]["diagnostics"]]
-    assert {(at["commit"], at["url"]) for at in locations} == {(None, None), (commit, url)}
+    locations = [d["location"] for d in json.loads(result.stdout)["diagnostics"]]
+    assert {(at.get("commit"), at.get("url")) for at in locations} == {(None, None), (commit, url)}
 
 
 # --- in the declaring repository: COMMIT_NOT_FOUND, COMMIT_NOT_ANCESTOR, and the rest at a commit

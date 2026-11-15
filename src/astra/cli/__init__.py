@@ -1,11 +1,10 @@
 """The `astra` command line. Each command is a module of its own, imported when
 it is run, which imports only click until then: `astra --help` loads no library.
 
-Exit codes: 0; 1 when `validate` finds an error, `check` a planned result that isn't
-`unchanged`, `view`, `check` and `history` an analysis that breaks a `MUST`, `history`
+Exit codes: 0; 1 when `validate` finds an error, `status` a planned result that isn't
+`unchanged`, `info`, `view`, `status` and `history` an analysis that breaks a `MUST`, `history`
 nothing in git of what it is asked for, a `paper` command a paper or a quote that isn't there,
-or `info` no analysis or no stack to show; 2 for a usage error, a broken environment or an
-internal error.
+or `info` no analysis; 2 for a usage error, a broken environment or an internal error.
 """
 
 from __future__ import annotations
@@ -23,12 +22,12 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import click
 
 if TYPE_CHECKING:
-    from astra.stack import Stack
-    from astra.validate import ValidationReport
+    from astra._internal.analysis.stack import Stack
+    from astra.model.validation_report import ValidationReport
 
 COMMANDS = MappingProxyType(
     {
-        "check": "astra.cli.check",
+        "status": "astra.cli.status",
         "guide": "astra.cli.guide",
         "history": "astra.cli.history",
         "info": "astra.cli.info",
@@ -81,12 +80,10 @@ def environment() -> Iterator[None]:
     """Stop with exit 2 where the analysis can't be read: there is none, git or the cache can't
     be used, or a file can't be read."""
     from astra import api
-    from astra.cache import CacheError
-    from astra.sources.git import GitError
 
     try:
         yield
-    except (api.NoAnalysisError, CacheError, GitError) as error:
+    except (api.NoAnalysisError, api.CacheError, api.GitError) as error:
         fail(str(error))
     except OSError as error:
         fail(f"can't read {error.filename}: {error.strerror}")
@@ -102,27 +99,19 @@ def find_analysis(start: Path | None = None) -> Path | None:
     return None
 
 
-def read_stack(path: Path | None) -> Stack:
-    """The stack whose root is the analysis in `path` (`api.bind`). Stops with exit 2 where it
-    can't be read, and with exit 1 where its root's file isn't a valid document or it is in no
-    repository, so that there is no stack to show."""
-    from astra import api
+def read_stack(path: Path | None) -> Stack | None:
+    """The stack whose root is the analysis in `path`, which needn't be valid; None where its
+    root's file isn't a valid document or it is in no repository. Stops with exit 2 where it
+    can't be read."""
+    from astra._internal.analysis.stack import bind
+    from astra._internal.sources.reader import worktree
 
     with environment():
-        bound = api.bind(path)
-    if bound.stack is None:
-        folder = "." if path is None else str(path)
-        click.echo(
-            "astra: the analysis's astra.yaml isn't a valid document, or isn't in a git "
-            f"repository, so there is no stack to show: `astra validate {folder}` says why",
-            err=True,
-        )
-        raise click.exceptions.Exit(FAILED)
-    return bound.stack
+        return bind(*worktree(path))[0]
 
 
 def write_report(report: ValidationReport, as_json: bool) -> None:
-    """Print a validation report as text or, `as_json`, as `astra-validation-report/1`."""
+    """Print a validation report as text or, `as_json`, as JSON."""
     if as_json:
         write_json(report.to_json())
     else:

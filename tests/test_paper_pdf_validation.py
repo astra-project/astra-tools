@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from astra.papers.cache import PaperCache
-from astra.papers.download import is_valid_pdf
+from astra._internal.papers.cache import PaperCache
+from astra._internal.papers.download import is_valid_pdf
 
 # ---------------------------------------------------------------------------
 # is_valid_pdf helper
@@ -114,11 +114,11 @@ class TestArxivPdfValidation:
         return resp
 
     def test_arxiv_rejects_html_despite_pdf_content_type(self) -> None:
-        from astra.papers.download import _download_arxiv_pdf
+        from astra._internal.papers.download import _download_arxiv_pdf
 
         resp = self._make_arxiv_response(HTML_CONTENT, "application/pdf")
 
-        with patch("astra.papers.download.httpx") as mock_httpx:
+        with patch("astra._internal.papers.download.httpx") as mock_httpx:
             mock_httpx.get.return_value = resp
             mock_httpx.HTTPStatusError = Exception
             mock_httpx.RequestError = Exception
@@ -129,13 +129,13 @@ class TestArxivPdfValidation:
         assert "magic bytes" in result.error  # type: ignore[operator]
 
     def test_arxiv_accepts_valid_pdf(self) -> None:
-        from astra.papers.download import _download_arxiv_pdf
+        from astra._internal.papers.download import _download_arxiv_pdf
 
         resp = self._make_arxiv_response(PDF_MAGIC, "application/pdf")
 
         with (
-            patch("astra.papers.download.httpx") as mock_httpx,
-            patch("astra.papers.download.fetch_doi_metadata") as mock_meta,
+            patch("astra._internal.papers.download.httpx") as mock_httpx,
+            patch("astra._internal.papers.download.fetch_doi_metadata") as mock_meta,
         ):
             mock_httpx.get.return_value = resp
             mock_httpx.HTTPStatusError = Exception

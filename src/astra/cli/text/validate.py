@@ -6,7 +6,7 @@ from __future__ import annotations
 from rich.text import Text
 
 from astra.cli.text import by_file, console
-from astra.validate import ValidationReport
+from astra.model.validation_report import ValidationReport
 
 
 def show(report: ValidationReport) -> None:

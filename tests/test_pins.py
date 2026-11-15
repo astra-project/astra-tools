@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.stack import Element, Identity, bind
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, bind
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
 from tests.conftest import repository
 
 ROOT = """\
@@ -86,7 +86,7 @@ def test_outputs_built_per_universe_and_once(kept: Path) -> None:
     """`output1` and `output4` list `decisions`, and
     `output6` reads `output4` without a pin; `output2` reads `output1` pinned to each universe,
     and `output3` reads only `input1`, so both are built once."""
-    stack = bind(WorktreeReader(kept, Repository(kept)), "").stack
+    stack = bind(WorktreeReader(kept, Repository(kept)), "")[0]
     assert stack is not None
     per_universe = Context(stack, Catalogue.load()).per_universe
     assert {element.id for element in per_universe} == {"output1", "output4", "output6"}

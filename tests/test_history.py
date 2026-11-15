@@ -1,5 +1,5 @@
 """History: `timeline`, `lineage`, `find` and `get` over the git history of the records of the
-root's planned results, `api.history`, and `astra history`.
+root's planned results (`astra._internal.results.history.History`), and `astra history`.
 
 The repository is the worked example with a few commits of records, records and bytes both
 committed: built and committed (`first`); `data/input1.csv` changed, `output1` made again in
@@ -17,16 +17,32 @@ import pytest
 from click.testing import CliRunner, Result
 
 from astra import api
+from astra._internal.analysis.resolve import read
+from astra._internal.results.hashing import Digest, digest_bytes
+from astra._internal.results.history import History, NotInHistoryError, RequestError, Version
+from astra._internal.sources.remote import Remotes
 from astra.cli import main
-from astra.hashing import digest_bytes
-from astra.history import Version
-from astra.records import Record
-from tests.conftest import ENVIRONMENT, MINIMAL, build, git, repository
-from tests.test_check import FROM_COMMIT, remake
-from tests.test_plan import LIB
+from astra.model.provenance_record import ProvenanceRecord, RecordedInput
+from tests.conftest import ENVIRONMENT, MINIMAL, build, git, remake, repository
+from tests.test_resolve import LIB
 from tests.test_validate import WORKED_EXAMPLE
 
-OTHER = "urn:example:environment2"
+OTHER = api.Environment("urn:example:environment2")
+
+FROM_COMMIT = """\
+spec_version: "0.1.0"
+analyses:
+  lib: {path: lib, commit: "%s"}
+outputs:
+  result:
+    type: table
+    format: csv
+    inputs: [lib.out#v1]
+    recipe:
+      command: python make.py {inputs} '{output}'
+"""
+"""A root that reads `lib`'s `out` in `lib`'s own `v1`, `lib` read at a commit that holds its
+records."""
 
 
 def astra(*args: str) -> Result:
@@ -42,9 +58,20 @@ def commit(top: Path) -> str:
     return head(repository(top, {}))
 
 
-def record(version: Version | None) -> Record:
-    assert version is not None and isinstance(version.record, Record)
+def history(top: Path) -> History:
+    """The history of the records of the analysis in `top`, as `astra history` reads it."""
+    remotes = Remotes()
+    return History(read(top, remotes), remotes)
+
+
+def record(version: Version | None) -> ProvenanceRecord:
+    assert version is not None and isinstance(version.record, ProvenanceRecord)
     return version.record
+
+
+def digest(recorded: ProvenanceRecord | RecordedInput) -> Digest:
+    """The hash and size a record gives, of its result's bytes or of what an entry read."""
+    return Digest(recorded.content_hash, recorded.size)
 
 
 @dataclass(frozen=True)
@@ -87,22 +114,26 @@ def copied(recorded: Recorded, tmp_path: Path) -> Path:
 def test_timeline_gives_each_version_of_a_record_newest_first(recorded: Recorded) -> None:
     """Each commit that changed the record at the result's place, and what the record says
     there: `output1#u2` was made three times, `output1#u1` twice."""
-    history = api.history(recorded.top)
-    versions = history.timeline("output1#u2")
+    kept = history(recorded.top)
+    versions = kept.timeline("output1#u2")
     assert [v.commit for v in versions] == [recorded.third, recorded.second, recorded.first]
-    assert [record(v).digest for v in versions] == [
+    assert [digest(record(v)) for v in versions] == [
         digest_bytes(b"output1#u2 3\n"),
         digest_bytes(b"output1#u2 2\n"),
         digest_bytes(b"output1#u2\n"),
     ]
-    assert [record(v).commit for v in versions] == [
+    assert [record(v).generated_by.commit for v in versions] == [
         recorded.second,
         recorded.first,
         recorded.built_from,
     ]
-    assert [record(v).environment for v in versions] == [OTHER, ENVIRONMENT, ENVIRONMENT]
+    assert [record(v).generated_by.environment for v in versions] == [
+        OTHER,
+        ENVIRONMENT,
+        ENVIRONMENT,
+    ]
     assert {v.place.record for v in versions} == {".astra/records/u2/output1.json"}
-    versions = history.timeline("output1#u1")
+    versions = kept.timeline("output1#u1")
     assert [v.commit for v in versions] == [recorded.second, recorded.first]
 
 
@@ -113,7 +144,7 @@ def test_timeline_says_where_a_version_isnt_a_valid_record(copied: Path) -> None
     broken = commit(copied)
     (copied / ".astra" / "records" / "output2.json").unlink()
     removed = commit(copied)
-    versions = api.history(copied).timeline("output2")
+    versions = history(copied).timeline("output2")
     assert [v.commit for v in versions[:2]] == [removed, broken]
     assert versions[0].record is None
     assert isinstance(versions[1].record, tuple)
@@ -125,16 +156,16 @@ def test_timeline_says_where_a_version_isnt_a_valid_record(copied: Path) -> None
 def test_a_record_never_committed_has_no_version(tmp_path: Path) -> None:
     top = repository(tmp_path, {"astra.yaml": WORKED_EXAMPLE, "data/input1.csv": "1\n"})
     build(top)
-    assert api.history(top).timeline("output2") == ()
+    assert history(top).timeline("output2") == ()
 
 
 def test_an_address_names_a_planned_results_place(recorded: Recorded) -> None:
     """A result's address, not an output's: `output1` is built per universe, so its
     results' addresses name a universe."""
-    history = api.history(recorded.top)
+    kept = history(recorded.top)
     for address in ("output1", "output3", "output1#u3", "decision1"):
-        with pytest.raises(api.RequestError, match="no planned result"):
-            history.timeline(address)
+        with pytest.raises(RequestError, match="no planned result"):
+            kept.timeline(address)
 
 
 # --- lineage ---
@@ -144,7 +175,7 @@ def test_lineage_gives_the_versions_a_record_was_made_from(recorded: Recorded) -
     """`output2`'s record at HEAD was made from the second versions of `output1#u1` and
     `output1#u2`, not `output1#u2`'s third, the latest; and each of those from
     `data/input1.csv`, a leaf, with its hash."""
-    lineage = api.history(recorded.top).lineage("output2")
+    lineage = history(recorded.top).lineage("output2")
     assert lineage.version is not None and lineage.version.commit == recorded.second
     assert lineage.users == ()
     made_from = {link.entry: link for link in lineage.inputs}
@@ -165,10 +196,10 @@ def test_lineage_where_no_version_has_the_hash_recorded(copied: Path) -> None:
     remake(copied, "output2", b"output2 3\n")
     git(copied, "add", ".astra/records/output2.json")
     git(copied, "commit", "--quiet", "--message", "output2")
-    lineage = api.history(copied).lineage("output2")
+    lineage = history(copied).lineage("output2")
     made_from = {link.entry: link for link in lineage.inputs}
     assert (made_from["output1#u1"].version, made_from["output1#u1"].inputs) == (None, ())
-    assert record(made_from["output1#u2"].version).digest == digest_bytes(b"output1#u2 3\n")
+    assert digest(record(made_from["output1#u2"].version)) == digest_bytes(b"output1#u2 3\n")
 
 
 def test_lineage_never_gives_a_version_committed_after_the_record_that_lists_it(
@@ -180,41 +211,41 @@ def test_lineage_never_gives_a_version_committed_after_the_record_that_lists_it(
     read is still the second."""
     remake(copied, "output1#u2", b"output1#u2 2\n")
     commit(copied)
-    history = api.history(copied)
-    made_from = {link.entry: link for link in history.lineage("output2").inputs}
+    kept = history(copied)
+    made_from = {link.entry: link for link in kept.lineage("output2").inputs}
     version = made_from["output1#u2"].version
     assert version is not None and version.commit == recorded.second
-    (use,) = history.lineage("output1#u2", used_by=True).users
+    (use,) = kept.lineage("output1#u2", used_by=True).users
     assert use.read is not None and use.read.commit == recorded.second
 
 
 def test_lineage_used_by_gives_the_records_that_list_a_result(recorded: Recorded) -> None:
     """The other way: `output2`'s record at HEAD lists `output1#u2`, with the hash of its
     second version."""
-    history = api.history(recorded.top)
-    lineage = history.lineage("output1#u2", used_by=True)
+    kept = history(recorded.top)
+    lineage = kept.lineage("output1#u2", used_by=True)
     assert lineage.version is not None and lineage.version.commit == recorded.third
     assert lineage.inputs == ()
     (use,) = lineage.users
     assert (use.version.place.address, use.version.commit) == ("output2", recorded.second)
     assert (use.entry, use.digest) == ("output1#u2", digest_bytes(b"output1#u2 2\n"))
     assert use.read is not None and use.read.commit == recorded.second
-    assert history.lineage("output2", used_by=True).users == ()
+    assert kept.lineage("output2", used_by=True).users == ()
 
 
 # --- find ---
 
 
 def test_find_by_hash_gives_the_versions_with_those_bytes(recorded: Recorded) -> None:
-    history = api.history(recorded.top)
-    (found,) = history.find(content_hash=digest_bytes(b"output1#u1\n").content_hash)
+    kept = history(recorded.top)
+    (found,) = kept.find(content_hash=digest_bytes(b"output1#u1\n").content_hash)
     assert (found.place.address, found.commit) == ("output1#u1", recorded.first)
-    assert history.find(content_hash=digest_bytes(b"made by no one\n").content_hash) == ()
+    assert kept.find(content_hash=digest_bytes(b"made by no one\n").content_hash) == ()
 
 
 def test_find_by_environment_gives_every_version_with_that_iri(recorded: Recorded) -> None:
-    history = api.history(recorded.top)
-    found = history.find(environment=ENVIRONMENT)
+    kept = history(recorded.top)
+    found = kept.find(environment=ENVIRONMENT.iri)
     assert sorted((v.place.address, v.commit) for v in found) == sorted(
         [
             ("output1#u1", recorded.first),
@@ -225,31 +256,31 @@ def test_find_by_environment_gives_every_version_with_that_iri(recorded: Recorde
             ("output2", recorded.second),
         ]
     )
-    (other,) = history.find(environment=OTHER)
+    (other,) = kept.find(environment=OTHER.iri)
     assert (other.place.address, other.commit) == ("output1#u2", recorded.third)
 
 
 def test_find_takes_one_of_a_hash_and_an_environment(recorded: Recorded) -> None:
-    history = api.history(recorded.top)
+    kept = history(recorded.top)
     with pytest.raises(ValueError, match="exactly one"):
-        history.find(content_hash=digest_bytes(b"output1#u1\n").content_hash, environment=OTHER)
+        kept.find(content_hash=digest_bytes(b"output1#u1\n").content_hash, environment=OTHER.iri)
     with pytest.raises(ValueError, match="exactly one"):
-        history.find()
+        kept.find()
 
 
 # --- get ---
 
 
 def test_get_gives_the_bytes_a_result_had_at_a_commit(recorded: Recorded) -> None:
-    history = api.history(recorded.top)
-    assert history.get("output1#u1", recorded.first) == b"output1#u1\n"
-    assert history.get("output1#u2", recorded.second) == b"output1#u2 2\n"
-    assert history.get("output1#u2", "HEAD") == b"output1#u2 3\n"
+    kept = history(recorded.top)
+    assert kept.get("output1#u1", recorded.first) == b"output1#u1\n"
+    assert kept.get("output1#u2", recorded.second) == b"output1#u2 2\n"
+    assert kept.get("output1#u2", "HEAD") == b"output1#u2 3\n"
 
 
 def test_get_where_the_commit_holds_no_record(recorded: Recorded) -> None:
-    with pytest.raises(api.NotInHistoryError, match="holds no record at"):
-        api.history(recorded.top).get("output1#u1", recorded.built_from)
+    with pytest.raises(NotInHistoryError, match="holds no record at"):
+        history(recorded.top).get("output1#u1", recorded.built_from)
 
 
 def test_get_where_the_bytes_arent_in_git(copied: Path) -> None:
@@ -258,30 +289,30 @@ def test_get_where_the_bytes_arent_in_git(copied: Path) -> None:
     git(copied, "rm", "--quiet", "--cached", "results/output2.csv")
     git(copied, "commit", "--quiet", "--message", "results left out")
     left_out = head(copied)
-    with pytest.raises(api.NotInHistoryError, match="aren't in git there"):
-        api.history(copied).get("output2", left_out)
+    with pytest.raises(NotInHistoryError, match="aren't in git there"):
+        history(copied).get("output2", left_out)
 
 
 def test_get_where_the_bytes_arent_the_recorded_ones(copied: Path) -> None:
     (copied / "results" / "u1" / "output1.json").write_bytes(b"edited\n")
     edited = commit(copied)
-    with pytest.raises(api.NotInHistoryError, match="aren't the ones its record there gives"):
-        api.history(copied).get("output1#u1", edited)
+    with pytest.raises(NotInHistoryError, match="aren't the ones its record there gives"):
+        history(copied).get("output1#u1", edited)
 
 
 def test_get_at_a_revision_that_names_no_commit(recorded: Recorded) -> None:
-    with pytest.raises(api.RequestError, match="names no commit"):
-        api.history(recorded.top).get("output1#u1", "nowhere")
+    with pytest.raises(RequestError, match="names no commit"):
+        history(recorded.top).get("output1#u1", "nowhere")
 
 
 # --- the stack it reads ---
 
 
 def test_an_invalid_analysis_has_no_history(tmp_path: Path) -> None:
-    """Like `plan`, it raises `InvalidAnalysisError`; `check` gives what statuses it can."""
+    """Like `resolve` and `check`, reading it raises `InvalidAnalysisError`."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL.replace("type: metric", "type: plot")})
     with pytest.raises(api.InvalidAnalysisError):
-        api.history(top)
+        history(top)
 
 
 def test_a_result_of_an_analysis_from_a_commit_has_its_one_version(tmp_path: Path) -> None:
@@ -291,11 +322,11 @@ def test_a_result_of_an_analysis_from_a_commit_has_its_one_version(tmp_path: Pat
     build(top, top / "lib")
     holding = commit(top)
     repository(top, {"astra.yaml": FROM_COMMIT % holding})
-    history = api.history(top)
-    (version,) = history.timeline("out#v1")
+    kept = history(top)
+    (version,) = kept.timeline("out#v1")
     assert (version.commit, version.place.record) == (holding, "lib/.astra/records/v1/out.json")
     assert record(version).address == "out#v1"
-    assert history.get("out#v1", holding) == b"out#v1\n"
+    assert kept.get("out#v1", holding) == b"out#v1\n"
 
 
 # --- astra history ---
@@ -311,7 +342,7 @@ def test_astra_history_timeline(recorded: Recorded) -> None:
     third = digest_bytes(b"output1#u2 3\n").content_hash
     assert f"    bytes        {third}, 13 byte(s)" in lines
     assert f"    made at      {recorded.second}" in lines
-    assert f"    environment  {OTHER}" in lines
+    assert f"    environment  {OTHER.iri}" in lines
     assert lines[-1] == "3 version(s)"
 
 
@@ -369,13 +400,13 @@ def test_astra_history_find(recorded: Recorded) -> None:
     lines = result.stdout.splitlines()
     assert lines[:2] == ["output1#u1  .astra/records/u1/output1.json", f"  {recorded.first}"]
     assert lines[-1] == "1 version(s)"
-    result = astra("history", "find", str(recorded.top), "--environment", ENVIRONMENT)
+    result = astra("history", "find", str(recorded.top), "--environment", ENVIRONMENT.iri)
     assert (result.exit_code, result.stdout.splitlines()[-1]) == (0, "6 version(s)")
     result = astra("history", "find", str(recorded.top), "--environment", "urn:example:none")
     assert result.exit_code == 1
     assert "no version of a planned result's record has urn:example:none" in result.stderr
     assert astra("history", "find", str(recorded.top)).exit_code == 2
-    both = ("--hash", old, "--environment", ENVIRONMENT)
+    both = ("--hash", old, "--environment", ENVIRONMENT.iri)
     assert astra("history", "find", str(recorded.top), *both).exit_code == 2
 
 

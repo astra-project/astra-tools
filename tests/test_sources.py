@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from astra.sources.git import Repository
-from astra.sources.paths import join, lies_inside
-from astra.sources.reader import WorktreeReader
+from astra._internal.sources.git import Repository
+from astra._internal.sources.paths import join, lies_inside
+from astra._internal.sources.reader import WorktreeReader
 from tests.conftest import repository
 
 

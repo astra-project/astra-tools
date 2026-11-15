@@ -7,10 +7,10 @@ from __future__ import annotations
 from rich.console import Console
 from rich.text import Text
 
+from astra._internal.results.hashing import Digest
+from astra._internal.results.history import Lineage, Link, Version
 from astra.cli.text import console, rule_line
-from astra.hashing import Digest
-from astra.history import Lineage, Link, Version
-from astra.records import Record
+from astra.model.provenance_record import ProvenanceRecord
 
 
 def show_versions(versions: tuple[Version, ...]) -> None:
@@ -29,7 +29,7 @@ def show_lineage(lineage: Lineage, used_by: bool) -> None:
     assert lineage.version is not None
     out.print(Text(f"{lineage.place.address}  {lineage.place.record}", style="bold"))
     _version(out, lineage.version)
-    if not isinstance(lineage.version.record, Record):
+    if not isinstance(lineage.version.record, ProvenanceRecord):
         return
     if not used_by:
         out.print("made from" if lineage.inputs else "made from nothing")
@@ -57,11 +57,12 @@ def _version(out: Console, version: Version) -> None:
             said = rule_line(broken.location, broken.level, broken.code, broken.message)
             out.print(Text("  ").append_text(said))
     else:
-        out.print(Text(f"    bytes        {_digest(record.digest)}"))
-        out.print(Text(f"    made at      {record.commit}"))
-        if record.finished is not None:
-            out.print(Text(f"    finished     {record.finished}"))
-        out.print(Text(f"    environment  {record.environment}"))
+        run = record.generated_by
+        out.print(Text(f"    bytes        {_digest(Digest(record.content_hash, record.size))}"))
+        out.print(Text(f"    made at      {run.commit}"))
+        if run.finished is not None:
+            out.print(Text(f"    finished     {run.finished}"))
+        out.print(Text(f"    environment  {run.environment.iri}"))
 
 
 def _link(out: Console, link: Link, indent: str) -> None:
@@ -84,8 +85,8 @@ def _read(address: str, version: Version | None) -> str:
     if version is None:
         return f"no version of {address}'s record gives them"
     record = version.record
-    assert isinstance(record, Record)
-    return f"{address}'s record of {version.commit}, made at {record.commit}"
+    assert isinstance(record, ProvenanceRecord)
+    return f"{address}'s record of {version.commit}, made at {record.generated_by.commit}"
 
 
 def _digest(digest: Digest) -> str:

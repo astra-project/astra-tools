@@ -1,6 +1,6 @@
-"""An analysis in brief, as text: its label and description, then its inputs, outputs,
-decisions and universes, or only the parts asked for; and, after it, each other analysis of
-its stack, the same way."""
+"""An analysis in brief, as text, from its resolved model: its label and description, then its
+inputs, outputs, decisions and universes, or only the parts asked for; and, after it, each
+other analysis of its stack, the same way."""
 
 from __future__ import annotations
 
@@ -9,53 +9,65 @@ from rich.markup import escape
 from rich.table import Table
 from rich.tree import Tree
 
-from astra import model
-from astra.cli.text import console, file_named
-from astra.stack import Identity, Member, Stack
+from astra.cli.text import console
+from astra.model.resolved_analysis import Analysis, ResolvedAnalysis
 
 
-def show(stack: Stack, only: set[str] | None = None) -> None:
-    """Each analysis of `stack`, the root first, with every part, or only the parts `only`
-    names."""
+def show(resolved: ResolvedAnalysis, only: set[str] | None = None) -> None:
+    """Each analysis of `resolved`, the driving one first, with every part, or only the parts
+    `only` names."""
     out = console()
-    names = _names(stack)
-    for member in stack.analyses.values():
-        root = member.identity == stack.root
-        if not root:
-            file = file_named(stack.location(member.identity, ()))
-            out.print()
-            out.print(
-                f"[bold magenta]Analysis: {escape(names[member.identity])}[/bold magenta]"
-                f"  [dim]{escape(file)}[/dim]"
-            )
-        if member.analysis is None:
-            out.print("  not a valid document: `astra validate` says why")
-            continue
-        _analysis(out, member, member.analysis, only, _layout(member) if root else "")
+    driving, *others = resolved.analyses
+    out.print(f"[bold]{escape(driving.label or 'Unknown')}[/bold]")
+    out.print(f"Spec version: {escape(resolved.spec_version)}")
+    _analysis(out, driving, only, (_layout(resolved), f"Planned results: {len(resolved.results)}"))
+    for each in others:
+        out.print()
+        out.print(
+            f"[bold magenta]Analysis: {escape(each.key)}[/bold magenta]"
+            f"  [dim]{escape(_file(each))}[/dim]"
+        )
+        if each.label:
+            out.print(f"[bold]{escape(each.label)}[/bold]")
+        _analysis(out, each, only)
 
 
-def _names(stack: Stack) -> dict[Identity, str]:
-    """Each analysis of the stack but the root, with the address it is first reached by from
-    the root: the ids of the declarations that lead to it, joined by `.`."""
-    names: dict[Identity, str] = {}
-    reached = [(stack.root, "")]
-    while reached:
-        owner, prefix = reached.pop(0)
-        for id_, declaration in stack.analyses[owner].declarations.items():
-            target = declaration.reached
-            if target is None or target == stack.root or target in names:
-                continue
-            names[target] = f"{prefix}{id_}"
-            reached.append((target, f"{prefix}{id_}."))
-    return names
+def _file(analysis: Analysis) -> str:
+    """An analysis's `astra.yaml` and, for one read at a commit, the commit and the repository
+    it came from."""
+    file = "astra.yaml" if analysis.folder == "." else f"{analysis.folder}/astra.yaml"
+    if analysis.commit is None:
+        return file
+    source = analysis.commit.repository
+    return f"{file} at {analysis.commit.id}" + ("" if source is None else f" from {source}")
+
+
+def _layout(resolved: ResolvedAnalysis) -> str:
+    """One line on the analyses the driving one declares, with the folders of those read in its
+    working tree."""
+    driving, by_key = resolved.analyses[0], {each.key: each for each in resolved.analyses}
+    declared = [by_key[key] for key in driving.declares.values()]
+    if not declared:
+        return ""
+    folders = sorted(f"{each.folder}/" for each in declared if each.commit is None)
+    noun = "sub-analysis" if len(declared) == 1 else "sub-analyses"
+    if len(folders) == len(declared):
+        return f"Layout: {len(declared)} {noun} in {', '.join(folders)}"
+    if folders:
+        return f"Layout: {len(declared)} {noun} ({len(folders)} in {', '.join(folders)})"
+    return f"Layout: {len(declared)} {noun}"
+
+
+def _id(ref: str) -> str:
+    """The id a ref ends with."""
+    return ref.rpartition(".")[2]
 
 
 def _analysis(
-    out: Console, member: Member, analysis: model.Analysis, only: set[str] | None, layout: str
+    out: Console, analysis: Analysis, only: set[str] | None, more: tuple[str, ...] = ()
 ) -> None:
-    """One analysis: its label, description and counts, then its parts."""
-    out.print(f"[bold]{escape(analysis.label or 'Unknown')}[/bold]")
-    out.print(f"Spec version: {escape(analysis.spec_version)}")
+    """One analysis: its description and counts, with the lines of `more` after them, then its
+    parts."""
     if analysis.description and analysis.description.strip():
         out.print()
         out.print(escape(analysis.description.strip()))
@@ -63,8 +75,9 @@ def _analysis(
         f"\n[dim]Inputs: {len(analysis.inputs)} | Outputs: {len(analysis.outputs)} | "
         f"Decisions: {len(analysis.decisions)} | Universes: {len(analysis.universes)}[/dim]"
     )
-    if layout:
-        out.print(f"[dim]Layout: {escape(layout)}[/dim]")
+    for line in more:
+        if line:
+            out.print(f"[dim]{escape(line)}[/dim]")
 
     def asked(part: str) -> bool:
         return only is None or part in only
@@ -74,72 +87,41 @@ def _analysis(
         table = Table(show_header=True)
         for column in ("ID", "Path", "Description"):
             table.add_column(column)
-        for id_, input_ in analysis.inputs.items():
-            table.add_row(id_, escape(input_.path), escape(input_.description or ""))
+        for input_ in analysis.inputs:
+            table.add_row(_id(input_.ref), escape(input_.path), escape(input_.description or ""))
         out.print(table)
     if asked("outputs"):
         out.print("\n[bold]Outputs:[/bold]")
         table = Table(show_header=True)
-        for column in ("ID", "Type", "Recipe", "Description"):
+        for column in ("ID", "Type", "Format", "Description"):
             table.add_column(column)
-        for id_, output in analysis.outputs.items():
-            table.add_row(id_, *_output(output), escape(output.description or ""))
+        for output in analysis.outputs:
+            table.add_row(
+                _id(output.ref), output.type, output.format, escape(output.description or "")
+            )
         out.print(table)
     if asked("decisions"):
         out.print("\n[bold]Decisions:[/bold]")
         _decisions(out, analysis)
     if only is None and analysis.universes:
         out.print("\n[bold]Universes:[/bold]")
-        for id_, universe in analysis.universes.items():
-            out.print(f"  [cyan]{id_}[/cyan]{escape(_universe(universe))}")
+        for universe in analysis.universes:
+            selected = ", ".join(f"{d} = {option}" for d, option in universe.selection.items())
+            line = f"  [cyan]{_id(universe.ref)}[/cyan]"
+            out.print(line + escape(f": {selected}") if selected else line)
 
 
-def _layout(member: Member) -> str:
-    """One line on the analyses the root declares, with the folders of those in its tree."""
-    declarations = member.declarations
-    if not declarations:
-        return ""
-    folders = sorted(
-        f"./{declaration.folder}/"
-        for declaration in declarations.values()
-        if declaration.declared.path is not None and declaration.folder
-    )
-    noun = "sub-analysis" if len(declarations) == 1 else "sub-analyses"
-    if len(folders) == len(declarations):
-        return f"{len(declarations)} {noun} in {', '.join(folders)}"
-    if folders:
-        return f"{len(declarations)} {noun} ({len(folders)} in {', '.join(folders)})"
-    return f"{len(declarations)} {noun}"
-
-
-def _output(output: model.Output) -> tuple[str, str]:
-    """An output's type and its recipe's command; a switch's decision and cases."""
-    if output.is_switch:
-        cases = ", ".join(f"{option}: {target}" for option, target in output.cases.items())
-        return "switch", escape(f"on {output.switch} ({cases})")
-    command = "[dim]-[/dim]" if output.recipe is None else escape(output.recipe.command)
-    return escape(output.type or ""), command
-
-
-def _universe(universe: model.Universe) -> str:
-    if universe.is_import:
-        return f": imports {universe.analysis}.{universe.universe}"
-    if universe.derived_from is not None:
-        return f": derived from {universe.derived_from}"
-    return ""
-
-
-def _decisions(out: Console, analysis: model.Analysis) -> None:
+def _decisions(out: Console, analysis: Analysis) -> None:
     """Each decision of `analysis`, as a tree of its rationale and options."""
-    for id_, decision in analysis.decisions.items():
-        tree = Tree(f"[cyan]{id_}[/cyan]: {escape(decision.label or '')}")
+    for decision in analysis.decisions:
+        tree = Tree(f"[cyan]{_id(decision.ref)}[/cyan]: {escape(decision.label or '')}")
         if decision.tags:
             tree.add(f"[dim]Tags:[/dim] {escape(', '.join(decision.tags))}")
         if decision.rationale:
             tree.add(f"[dim]Rationale:[/dim] {escape(decision.rationale)}")
         options = tree.add("[dim]Options:[/dim]")
-        for option_id, option in decision.options.items():
-            text = f"{option_id}: {escape(option.label or '')}"
+        for option in decision.options:
+            text = f"{option.id}: {escape(option.label or '')}"
             if option.excluded is not None:
                 text += f" [yellow](excluded: {escape(option.excluded)})[/yellow]"
             if option.description:

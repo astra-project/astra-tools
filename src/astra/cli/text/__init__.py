@@ -11,11 +11,11 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from astra.diagnostics import Diagnostic, Level, Location
+from astra.model.diagnostic import Diagnostic, Level, Location
 
 __all__ = ["Table", "by_file", "console", "file_named", "rule_line"]
 
-_LEVELS = MappingProxyType({"error": "bold red", "warning": "yellow"})
+_LEVELS = MappingProxyType({"error": "bold red", "warning": "yellow", "note": "cyan"})
 
 
 def console() -> Console:
@@ -32,18 +32,13 @@ def file_named(location: Location) -> str:
     return f"{location.file} at {location.commit}{source}"
 
 
-def rule_line(
-    location: Location, level: Level, code: str, message: str, breaks: str | None = None
-) -> Text:
-    """A rule broken, as `line:col level CODE message` under its file, with the parse or schema
-    code a record breaks after its code."""
+def rule_line(location: Location, level: Level, code: str, message: str) -> Text:
+    """A diagnostic, as `line:col level CODE message` under its file."""
     line = Text("  ")
     if location.line is not None:
         line.append(f"{location.line}:{location.column} ")
     line.append(level, style=_LEVELS[level])
     line.append(f" {code}", style="bold")
-    if breaks is not None:
-        line.append(f" ({breaks})")
     line.append(f" {message}")
     return line
 

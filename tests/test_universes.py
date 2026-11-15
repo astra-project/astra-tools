@@ -14,13 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from astra import api, rules
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.stack import Element, Identity, bind
-from astra.universes import Selection, selections
+from astra import api
+from astra._internal.analysis import rules
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, bind
+from astra._internal.analysis.universes import Selection, selections
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import WorktreeReader
 from tests.conftest import repository
 from tests.spec import SPEC
 
@@ -150,7 +151,7 @@ def found(report: api.ValidationReport) -> list[tuple[str, str, str | None]]:
 
 def effective(top: Path) -> Mapping[Element, Selection | None]:
     """Every universe's effective selection, in the stack whose root is `top`."""
-    stack = bind(WorktreeReader(top, Repository(top)), "").stack
+    stack = bind(WorktreeReader(top, Repository(top)), "")[0]
     assert stack is not None
     return selections(stack)
 
@@ -309,7 +310,7 @@ def test_a_universe_with_no_effective_selection_checks_and_drives_by_its_own_key
     assert "selects nothing for `subanalysis.decision1`" in next(
         d.message for d in report.diagnostics if d.code == "MISSING_DECISION"
     )
-    stack = bind(WorktreeReader(top, Repository(top)), "").stack
+    stack = bind(WorktreeReader(top, Repository(top)), "")[0]
     assert stack is not None
     driven = Context(stack, Catalogue.load()).driven
     assert {tuple(d.id for d in chain) for chain in driven[ROOT_ID]} == {

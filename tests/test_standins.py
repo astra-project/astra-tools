@@ -9,9 +9,18 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.sources.git import Repository
-from astra.sources.reader import WorktreeReader
-from astra.sources.standins import BUILT_IN, Dvc, GitAnnex, GitLfs, registered
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import CommitReader, WorktreeReader
+from astra._internal.sources.remote import Remotes
+from astra._internal.sources.standins import (
+    BUILT_IN,
+    Dvc,
+    Found,
+    GitAnnex,
+    GitLfs,
+    look,
+    registered,
+)
 from tests.conftest import MINIMAL, repository
 
 ANNEXED = "SHA256E-s6--" + "5" * 64 + ".bin"
@@ -78,6 +87,115 @@ def test_each_gives_the_hash_and_size_of_what_it_stands_for_where_it_can(
     assert Dvc().gives(tree, "huge.csv") is None
 
 
+def test_each_says_where_the_content_is_on_disk(tmp_path: Path) -> None:
+    """A git-annex link leads to the content once it is fetched, and DVC puts it at the path
+    beside its file. A pointer file is there only while the content isn't. At a commit, the
+    tree isn't on disk, and a tool's store is the tool's to read."""
+    files = {
+        "lfs.bin": LFS_POINTER,
+        "unlocked.bin": f"/annex/objects/{ANNEXED}\n",
+        "huge.csv.dvc": DVC_FILE.format("huge.csv"),
+    }
+    top = repository(tmp_path, files)
+    kept = top / ".git" / "annex" / "objects" / "Jx" / "3M" / ANNEXED / ANNEXED
+    (top / "locked.bin").symlink_to(kept.relative_to(top))
+    repository(top, {})
+    reader = WorktreeReader(top, Repository(top))
+    assert GitLfs().content(reader, "lfs.bin") is None
+    assert GitAnnex().content(reader, "unlocked.bin") is None
+    assert GitAnnex().content(reader, "locked.bin") is None
+    assert Dvc().content(reader, "huge.csv") is None
+    assert look(reader, "locked.bin", BUILT_IN) == Found(False, GitAnnex())
+
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"binary")
+    (top / "huge.csv").write_text("a,b\n")
+    reader = WorktreeReader(top, Repository(top))
+    assert GitAnnex().content(reader, "locked.bin") == kept
+    assert Dvc().content(reader, "huge.csv") == top / "huge.csv"
+    assert look(reader, "locked.bin", BUILT_IN) == Found(True, GitAnnex(), kept)
+    assert look(reader, "huge.csv.dvc", BUILT_IN) == Found(True)
+    assert look(reader, "nothing.bin", BUILT_IN) == Found()
+    head = Repository(top).head()
+    assert head is not None
+    at_commit = CommitReader(Repository(top), head, None, Remotes())
+    assert GitAnnex().recognises(at_commit, "locked.bin")
+    assert GitAnnex().content(at_commit, "locked.bin") is None
+
+
+def test_a_git_annex_link_is_followed_to_a_store_outside_the_tree(tmp_path: Path) -> None:
+    """In a submodule or a linked worktree, `.git` is itself a link, and the object store is
+    outside the tree: the link is followed as the operating system follows it, and its
+    content is here."""
+    store = tmp_path / "parent" / ".git" / "modules" / "sub"
+    kept = store / "annex" / "objects" / "Jx" / "3M" / ANNEXED / ANNEXED
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"binary")
+    top = repository(tmp_path / "sub", {"keep": ""})
+    (top / "gitdir").symlink_to(store)
+    (top / "locked.bin").symlink_to(f"gitdir/annex/objects/Jx/3M/{ANNEXED}/{ANNEXED}")
+    reader = WorktreeReader(top, Repository(top))
+    assert look(reader, "locked.bin", BUILT_IN) == Found(True, GitAnnex(), kept)
+
+
+def test_a_link_dressed_as_git_annexs_that_leads_elsewhere_isnt_followed(tmp_path: Path) -> None:
+    """A git-annex link is relative and names a file in an `annex/objects` folder of the
+    tree; and what it leads to really is in one. A link that goes above the top, or is
+    absolute, is no stand-in. One whose `annex/objects` is itself a link to some other folder
+    is, and its content isn't here: the file it leads to is in no object store."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_text("secret")
+    top = repository(tmp_path / "repo", {"decoy/annex/keep": ""})
+    (top / "above.bin").symlink_to("decoy/annex/objects/../../../../outside/secret")
+    (top / "absolute.bin").symlink_to(outside / "secret")
+    (top / "decoy" / "annex" / "objects").symlink_to(outside)
+    (top / "dressed.bin").symlink_to("decoy/annex/objects/secret")
+    reader = WorktreeReader(top, Repository(top))
+    assert (top / "dressed.bin").read_text() == "secret"
+    assert look(reader, "above.bin", BUILT_IN) == Found()
+    assert look(reader, "absolute.bin", BUILT_IN) == Found()
+    assert look(reader, "dressed.bin", BUILT_IN) == Found(False, GitAnnex())
+
+
+def test_what_is_beside_a_dvc_file_is_followed_wherever_it_leads(tmp_path: Path) -> None:
+    """DVC links a file from its cache, which can be anywhere: outside the repository too."""
+    cache = tmp_path / "shared-cache" / "files" / "md5" / "0c"
+    cache.mkdir(parents=True)
+    (cache / "c175b9c0f1b6a831c399e269772661").write_text("a,b\n")
+    top = repository(tmp_path / "repo", {"huge.csv.dvc": DVC_FILE.format("huge.csv")})
+    (top / "huge.csv").symlink_to(cache / "c175b9c0f1b6a831c399e269772661")
+    reader = WorktreeReader(top, Repository(top))
+    kept = cache / "c175b9c0f1b6a831c399e269772661"
+    assert look(reader, "huge.csv", BUILT_IN) == Found(True, Dvc(), kept)
+    # A link with no DVC file beside it is no stand-in, and is followed nowhere.
+    (top / "plain.csv").symlink_to(kept)
+    assert look(reader, "plain.csv", BUILT_IN) == Found()
+
+
+class Counting(WorktreeReader):
+    """A working tree that keeps how much of each file is asked for."""
+
+    def read(self, path: str, limit: int | None = None) -> bytes:
+        READ.append((path, limit))
+        return super().read(path, limit)
+
+
+READ: list[tuple[str, int | None]] = []
+
+
+def test_a_file_too_long_to_be_a_pointer_isnt_read_to_see(tmp_path: Path) -> None:
+    """Each stand-in looks at a file's first kilobyte and no more, so a result of gigabytes
+    costs what a small one does."""
+    top = repository(tmp_path, {"big.bin": "x" * 100_000, "lfs.bin": LFS_POINTER})
+    reader = Counting(top, Repository(top))
+    READ.clear()
+    assert look(reader, "big.bin", BUILT_IN) == Found(True)
+    assert READ and all(path == "big.bin" and limit == 1025 for path, limit in READ)
+    assert reader.read("big.bin", 4) == b"xxxx" and len(reader.read("big.bin")) == 100_000
+    assert look(reader, "lfs.bin", BUILT_IN) == Found(False, GitLfs())
+
+
 PLUGIN = """\
 from dataclasses import dataclass
 
@@ -94,6 +212,9 @@ class Store:
         return entry is not None and entry.kind == "symlink" and entry.target.startswith("store/")
 
     def gives(self, reader, path):
+        return None
+
+    def content(self, reader, path):
         return None
 
 

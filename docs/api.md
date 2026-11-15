@@ -1,0 +1,322 @@
+# Python API
+
+`astra.api` is the whole public surface of astra-tools, and the one module another package
+imports. Everything else is private and may change.
+
+```python
+from astra import api
+```
+
+It holds eight functions, the classes they return ([Data model](data-model.md)) and the errors
+they raise ([Errors](#errors)).
+
+| Function | What it does | Returns |
+|---|---|---|
+| [`validate`](#validate) | Says whether an analysis is valid | [`ValidationReport`](data-model.md#validationreport) |
+| [`resolve`](#resolve) | Says what an analysis means | [`ResolvedAnalysis`](data-model.md#resolvedanalysis) |
+| [`status`](#status) | Says how each of its results stands: whether its record still holds | [`StatusReport`](data-model.md#statusreport) |
+| [`init_analysis`](#init_analysis) | Makes a folder an analysis, where it isn't one | nothing |
+| [`write_records`](#write_records) | Writes a result's record at each of its places | nothing |
+| [`paper`](#paper) | Looks a paper up in the paper cache | [`Paper`](data-model.md#paper), or `None` |
+| [`add_paper`](#add_paper) | Puts a paper in the paper cache | [`Paper`](data-model.md#paper) |
+| [`verify_quote`](#verify_quote) | Seeks a quote in a cached paper | [`QuoteStatus`](data-model.md#quotestatus) |
+
+The first three are functions of the analysis's files and of git, and nothing else. None runs a
+recipe. What to build, in what order, where and in which environment is a runner's own
+business, and nothing here says it.
+
+## Reading an analysis
+
+`validate`, `resolve` and `status` read an analysis the same way. `path` is the analysis's
+folder, the current folder by default, and it holds the analysis's `astra.yaml`: nothing is
+searched for. The analysis is read in the working tree of the git repository that holds it, and
+each analysis it declares is read with it, in the working tree or at its commit.
+
+A commit of another repository is fetched into the cache, once. With `offline=True` nothing is
+fetched, and only the commits kept from earlier fetches can be read.
+
+All three raise:
+
+- [`NoAnalysisError`](#errors) where `path` holds no `astra.yaml`;
+- [`GitError`](#errors) where git can't be run;
+- [`CacheError`](#errors) where the cache can't be used;
+- `OSError` where a file can't be read.
+
+## `validate`
+
+```python
+def validate(path=None, *, offline=False) -> ValidationReport
+```
+
+The validator's report on the analysis: a [`Diagnostic`](data-model.md#diagnostic) for each
+parse, schema and validator rule it breaks, over its whole stack. An analysis that breaks a
+`MUST` isn't an error of the function: the report says so, in `valid` and in its diagnostics.
+
+```python
+report = api.validate("my-analysis")
+for diagnostic in report.diagnostics:
+    at = diagnostic.location
+    print(f"{at.file}:{at.line} {diagnostic.level} {diagnostic.code} {diagnostic.message}")
+```
+
+## `resolve`
+
+```python
+def resolve(path=None, *, offline=False) -> ResolvedAnalysis
+```
+
+The analysis, resolved: every analysis of its stack with what it declares, each universe's
+selection, and its results, each with its places, what it reads and its command as it runs. It
+also gives `head`, the commit the repository is on. Every rule of the specification is already applied, so a reader follows ids and applies
+none itself.
+
+Raises [`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`: only a valid
+analysis resolves. The error's `report` is the validator's report.
+
+```python
+analysis = api.resolve("my-analysis")
+for result in analysis.results:
+    print(result.id, result.places[0].file_path, result.command)
+```
+
+## `status`
+
+```python
+def status(path=None, *, offline=False) -> StatusReport
+```
+
+How the analysis's results stand: for each result that `resolve` gives, its
+[`Status`](data-model.md#status), under the result's id; and the status of each evidence that
+cites an output. The records and bytes are the ones in the working tree.
+
+A result's status says whether its record still holds: whether anything the result is made
+from has changed since the commit the record names. This is what the specification calls
+checking, and its [check rules](https://astra-spec.org/0.1/specification/#rules) are the ones
+a status reports.
+
+The report also says where the [bytes](data-model.md#bytes) of each result and of each input
+are, and which large-file tool keeps them. A result's state doesn't depend on its bytes: a
+clone that hasn't fetched them reads as up to date. astra-tools never fetches, so a runner
+reads what needs it:
+
+```python
+for ref, content in report.inputs.items():
+    if content.state == "absent":
+        print(f"{ref} needs fetching with {content.kept_by}")
+```
+
+git-annex and Git LFS are read without their content. An input kept by DVC must be pulled for
+the results made from it to be compared ([why](data-model.md#bytes)).
+
+The report holds none of the analysis: `resolve` gives that. Raises
+[`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`.
+
+```python
+report = api.status("my-analysis")
+for id, status in report.statuses.items():
+    print(id, status.state, status.bytes, [broken.code for broken in status.why])
+```
+
+### Asking for both
+
+A runner needs both what the results are and how each stands, so it calls `resolve` and
+`status`. Each reads the working tree, and each gives `head`, the commit the repository was on.
+Where the two differ, something was committed between the calls, and the runner asks again:
+
+```python
+analysis = api.resolve(folder)
+report = api.status(folder)
+if report.head != analysis.head:
+    raise RuntimeError("the repository moved between the two readings: ask again")
+```
+
+`head` names the commit, not the files. A runner builds only from a committed tree, so for it
+the same `head` is the same files. Where the working tree has uncommitted changes, two readings
+at the same `head` can still differ.
+
+## `init_analysis`
+
+```python
+def init_analysis(directory) -> None
+```
+
+Converges `directory` into an analysis. Where it has no `astra.yaml`, one is written with a
+`spec_version` and a label, and nothing declared. The folder is made if need be.
+
+It is idempotent: an `astra.yaml` already there is left exactly as it is. A second call changes
+nothing, and a folder that already holds an analysis is safe to pass.
+
+Nothing else is written or looked at, so a tool scaffolds into a folder under its own
+conventions. [`astra init`](cli.md#astra-init) calls it, and adds a `.gitignore` and a git
+repository.
+
+Raises `OSError` where the file can't be written.
+
+## `write_records`
+
+```python
+def write_records(folder, result, content_hash, size, generated_by) -> None
+```
+
+Records a result as a run made it. `folder` is the analysis's folder, `result` a
+[`Result`](data-model.md#result) of its resolved analysis, `content_hash` and `size` the hash
+(`sha256:<hex>`) and size of the bytes the recipe made, and `generated_by` the run, a
+[`Generation`](data-model.md#generation).
+
+A [`ProvenanceRecord`](data-model.md#provenancerecord) is written at each of the result's
+places, with that place's address. Each is JSON with sorted keys, written to a temporary file
+and moved into place.
+
+What a record says is the runner's to find out, and true of its run: this function hashes no
+file and reads no checkout.
+
+Raises `ValueError`, and writes nothing, where:
+
+- `result` is a result from a commit (it has a `commit`): it is never built, and its places
+  aren't in the working tree;
+- the record would be invalid: `generated_by` hasn't one item of `inputs` for each entry the
+  result's output lists, or a field hasn't the form the record schema asks for.
+
+Raises `OSError` where a record can't be written.
+
+## Papers
+
+The paper functions are apart from the rest. They aren't functions of an analysis's files: the
+paper cache is a folder of this machine, `add_paper` uses the network, and matching a quote
+against a PDF's text is astra-tools' own, as the specification has no rule on it.
+
+A paper is kept under its DOI as it was given and, where one was given, its version. The
+lookup is exact: `version=7` and no version are two papers.
+
+All three raise [`CacheError`](#errors) where the cache can't be used.
+
+### `paper`
+
+```python
+def paper(doi, *, version=None) -> Paper | None
+```
+
+The paper of `doi` in the paper cache, at `version` where evidence gives one; `None` where it
+isn't there.
+
+### `add_paper`
+
+```python
+def add_paper(doi, *, version=None, pdf=None) -> Paper
+```
+
+Puts the paper of `doi` in the cache, and returns it. With `pdf`, the PDF at that path is kept.
+With none, an arXiv DOI (`10.48550/arXiv.<id>`) is downloaded from arXiv, at `version` where
+one is given; no other paper is downloaded. A paper already in the cache is returned as it is.
+
+Raises [`PaperError`](#errors) where no PDF can be got or the file isn't a PDF, and `OSError`
+where `pdf` can't be read.
+
+### `verify_quote`
+
+```python
+def verify_quote(doi, quote, *, version=None, location=None) -> QuoteStatus
+```
+
+Whether `quote`, a [`TextQuoteSelector`](data-model.md#textquoteselector), is in the cached
+paper of `doi`. With `location`, a [`FragmentSelector`](data-model.md#fragmentselector) that
+gives a page of a PDF (`page=6`), the quote is to be on that page. The arguments are the fields
+of an [`Evidence`](data-model.md#evidence), so one from a resolved analysis passes straight in:
+
+```python
+for each in analysis.analyses:
+    for insight in each.prior_insights:
+        for evidence in insight.evidence:
+            if evidence.doi and evidence.quote:
+                status = api.verify_quote(
+                    evidence.doi,
+                    evidence.quote,
+                    version=evidence.version,
+                    location=evidence.location,
+                )
+                print(insight.ref, status.state, status.page)
+```
+
+The match allows for what extracting a PDF's text changes, and a quote's `prefix` or `suffix`
+tells one passage from another like it. A paper that isn't in the cache is a state of the
+status, `no_paper`, not an error.
+
+Raises [`PaperError`](#errors) where the PDF's text can't be read.
+
+## Errors
+
+| Error | Raised where |
+|---|---|
+| `NoAnalysisError` | A folder holds no `astra.yaml` |
+| `InvalidAnalysisError` | The analysis breaks a `MUST`, so it has no resolved analysis and no statuses. Its `report` attribute is the [`ValidationReport`](data-model.md#validationreport) |
+| `GitError` | git can't be run |
+| `CacheError` | The cache can't be used where the environment puts it |
+| `PaperError` | A paper can't be put in the cache, or its PDF's text can't be read |
+
+## A runner, in brief
+
+This is the least a runner does with the API: ask for the analysis and for the status of its
+results, build what isn't `unchanged` in the order the results come in, and record each. It leaves out what the specification's runner rules
+ask for, such as building only from a committed tree.
+
+```python
+import hashlib
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+from astra import api
+
+
+def digest(path: Path) -> tuple[str, int]:
+    data = path.read_bytes()
+    return f"sha256:{hashlib.sha256(data).hexdigest()}", len(data)
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+folder = Path(".")
+analysis = api.resolve(folder)
+report = api.status(folder)
+if analysis.head is None or report.head != analysis.head:
+    raise SystemExit("the repository has no commit, or moved between the two readings")
+analyses = {each.key: each for each in analysis.analyses}
+inputs = {each.ref: each for one in analysis.analyses for each in one.inputs}
+results = {each.id: each for each in analysis.results}
+
+for result in analysis.results:  # each comes after every result it reads
+    if report.statuses[result.id].state == "unchanged" or result.command is None:
+        continue  # up to date, or not built from the working tree alone
+    # What each entry reads: an input's file, or another result's bytes.
+    read = []
+    for source in result.inputs:
+        if source.input is not None:
+            path = inputs[source.input].path
+        else:
+            path = results[source.result].places[0].file_path
+        read.append(api.RecordedInput(source.entry, *digest(folder / path)))
+    # The recipe runs in the folder of the analysis its output belongs to.
+    owner = analyses[".".join(result.output.split(".")[:-2])]
+    started = now()
+    subprocess.run(result.command, shell=True, cwd=folder / owner.folder, check=True)
+    generation = api.Generation(
+        commit=analysis.head,
+        environment=api.Environment("urn:example:python-3.13"),
+        runner=api.Runner("example-runner", "0.1.0"),
+        inputs=tuple(read),
+        started=started,
+        finished=now(),
+    )
+    api.write_records(folder, result, *digest(folder / result.places[0].file_path), generation)
+```
+
+After it, `astra status` reads the record back:
+
+```console
+$ astra status
+fit#baseline  unchanged  present  .astra/records/baseline/fit.json
+  made in urn:example:python-3.13 by example-runner 0.1.0
+1 result(s), 1 unchanged, 0 stale, 0 missing; 0 absent
+```

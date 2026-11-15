@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from astra import api, contract, rules, validate
-from astra.diagnostics import Catalogue
+from astra import api
+from astra._internal.analysis import rules, validate
+from astra._internal.documents import contract
+from astra._internal.documents.catalogue import Catalogue
 from tests.conftest import MINIMAL, analysis, git_init, repository
 from tests.spec import SPEC
 
@@ -256,8 +258,8 @@ def test_unchecked_lists_the_validator_codes_this_build_doesnt_check(tmp_path: P
 
 def test_the_report_as_json(outside: Path) -> None:
     document = json.loads(json.dumps(api.validate(analysis(outside)).to_json()))
+    # Every field under its name, a location's missing ones left out, never null.
     assert document == {
-        "shape": "astra-validation-report/1",
         "root": "astra.yaml",
         "valid": False,
         "diagnostics": [
@@ -265,15 +267,7 @@ def test_the_report_as_json(outside: Path) -> None:
                 "code": "NOT_IN_REPOSITORY",
                 "level": "error",
                 "message": document["diagnostics"][0]["message"],
-                "location": {
-                    "file": "astra.yaml",
-                    "pointer": "",
-                    "line": None,
-                    "column": None,
-                    "key": None,
-                    "commit": None,
-                    "url": None,
-                },
+                "location": {"file": "astra.yaml", "pointer": ""},
                 "related": [],
             }
         ],

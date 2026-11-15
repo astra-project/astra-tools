@@ -5,15 +5,16 @@ from __future__ import annotations
 
 import importlib.metadata
 import subprocess
-import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 import pytest
 
 from astra import api
-from astra.plan import Result
-from astra.records import Runner, new_record, write_record
+from astra._internal.analysis.resolve import read
+from astra._internal.results.hashing import Digest, digest_bytes, digest_file
+from astra._internal.results.history import History
+from astra._internal.sources.remote import Remotes
 
 MINIMAL = """\
 spec_version: "0.1.0"
@@ -105,8 +106,18 @@ def analysis(folder: Path, text: str = MINIMAL) -> Path:
     return folder
 
 
-RUNNER = Runner("astra-tools-tests", "1")
-ENVIRONMENT = "urn:example:environment1"
+RUNNER = api.Runner("astra-tools-tests", "1")
+ENVIRONMENT = api.Environment("urn:example:environment1")
+
+
+def owner(analysis: api.ResolvedAnalysis, result: api.Result) -> api.Analysis:
+    """The analysis `result` belongs to: its universe's or, for a result built once, its
+    output's."""
+    for each in analysis.analyses:
+        held = each.outputs if result.universe is None else each.universes
+        if (result.universe or result.output) in [element.ref for element in held]:
+            return each
+    raise LookupError(result.id)
 
 
 def build(
@@ -114,33 +125,61 @@ def build(
     folder: Path | None = None,
     *,
     commit: str | None = None,
-    made: Callable[[Result], bytes] = lambda result: f"{result.places[0].address}\n".encode(),
-) -> tuple[Result, ...]:
-    """Build the analysis in `folder`, `top` by default, in the working tree whose top is `top`,
-    as a runner would but without running a recipe: each planned result it doesn't read through
-    a record, in the plan's order, gets the bytes `made` gives it at each of its default places,
-    and a record from `records.new_record` at each of its places, naming `commit` (HEAD by
-    default) as the commit its recipe ran from. What an entry reads at a commit is got through
-    `api.history`, outside the checkout. Nothing is committed. Gives the plan's results."""
+    made: Callable[[api.Result], bytes] = lambda result: f"{result.places[0].address}\n".encode(),
+) -> tuple[api.Result, ...]:
+    """Build the analysis in `folder`, `top` by default, a folder of the working tree whose top
+    is `top`, as a runner would but without running a recipe: each planned result that isn't a
+    result from a commit, each after what it reads, gets the bytes `made` gives it at each of
+    its default places, and a record at each of its places, naming `commit` (HEAD by default) as
+    the commit its recipe ran from. What an entry reads of a result from a commit is got from
+    git. Nothing is committed. Gives the planned results."""
+    root = folder or top
     commit = commit or git(top, "rev-parse", "HEAD").strip()
-    results = api.plan(folder or top).results
-    kept = Path(tempfile.mkdtemp(prefix="got-"))
-    for result in results:
-        if result.read_only:
+    analysis = api.resolve(root)
+    inputs = {each.ref: each for found in analysis.analyses for each in found.inputs}
+    results = {result.id: result for result in analysis.results}
+    for result in analysis.results:
+        if owner(analysis, result).commit is not None:
             continue
+        data = made(result)
         for place in result.places:
-            (top / place.bytes).parent.mkdir(parents=True, exist_ok=True)
-            (top / place.bytes).write_bytes(made(result))
-        got = {}
-        for read in result.inputs:
-            if read.commit is not None and read.place is not None:
-                data = api.history(folder or top).get(read.place.address, read.commit)
-                path = kept / str(len(got))
-                path.write_bytes(data)
-                got[read.entry] = str(path)
-        records = new_record(
-            result, checkout=top, commit=commit, environment=ENVIRONMENT, runner=RUNNER, got=got
-        )
-        for place, record in zip(result.places, records, strict=True):
-            write_record(top / place.record, record)
-    return results
+            (root / place.file_path).parent.mkdir(parents=True, exist_ok=True)
+            (root / place.file_path).write_bytes(data)
+        read_ = []
+        for source in result.inputs:
+            found: Digest
+            if source.input is not None:
+                found = digest_file(root / inputs[source.input].path)
+            else:
+                upstream = results[source.result or ""]
+                at = owner(analysis, upstream).commit
+                if at is None:
+                    found = digest_file(root / upstream.places[0].file_path)
+                else:
+                    remotes = Remotes()
+                    history = History(read(root, remotes), remotes)
+                    found = digest_bytes(history.get(upstream.places[0].address, at.id))
+            read_.append(api.RecordedInput(source.entry, found.content_hash, found.size))
+        hashed = digest_bytes(data)
+        run = api.Generation(commit, ENVIRONMENT, RUNNER, tuple(read_))
+        api.write_records(root, result, hashed.content_hash, hashed.size, run)
+    return analysis.results
+
+
+def remake(top: Path, id_: str, data: bytes, environment: api.Environment = ENVIRONMENT) -> None:
+    """Make the root's result `id_` again in the working tree `top`, as a runner would from
+    HEAD: `data` its bytes, and its record, of what it reads in the working tree, run in
+    `environment`."""
+    analysis = api.resolve(top)
+    paths = {each.ref: each.path for found in analysis.analyses for each in found.inputs}
+    paths |= {result.id: result.places[0].file_path for result in analysis.results}
+    (result,) = [result for result in analysis.results if result.id == id_]
+    (top / result.places[0].file_path).write_bytes(data)
+    found = [
+        (source.entry, digest_file(top / paths[source.input or source.result or ""]))
+        for source in result.inputs
+    ]
+    listed = tuple(api.RecordedInput(entry, d.content_hash, d.size) for entry, d in found)
+    made = digest_bytes(data)
+    run = api.Generation(git(top, "rev-parse", "HEAD").strip(), environment, RUNNER, listed)
+    api.write_records(top, result, made.content_hash, made.size, run)

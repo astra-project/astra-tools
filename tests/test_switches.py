@@ -5,7 +5,7 @@ on some branch*), and the validator's rules on them (Rules): `UNRESOLVED_ADDRESS
 and `UNDRIVEN_DECLARATION`, with what a name that names nothing, a switch undetermined in a
 universe, a universe with no effective selection and an output on a cycle leave unchecked.
 
-Binding first (`api.bind`), then the validator (`api.validate`). Which files are valid is the
+Binding first (`stack.bind`), then the validator (`api.validate`). Which files are valid is the
 conformance suite's to say; these tests pin astra-tools' own part: where each diagnostic is
 reported (its file, pointer and key), its level, and what its message says.
 
@@ -23,9 +23,10 @@ from pathlib import Path
 import pytest
 
 from astra import api
-from astra.diagnostics import Catalogue
-from astra.rules.context import Context
-from astra.stack import Element, Identity
+from astra._internal.analysis.rules.context import Context
+from astra._internal.analysis.stack import Element, Identity, bind
+from astra._internal.documents.catalogue import Catalogue
+from astra._internal.sources.reader import worktree
 from tests.conftest import MINIMAL, git, repository
 
 ROOT = Identity("")
@@ -322,7 +323,7 @@ def test_a_switch_is_an_element_of_its_own_kind(running: Path) -> None:
     """Elements: a switch is an entry of `outputs`, bound as an element of kind `switch`, never
     `output`: it has no result, record, name or place of its own. An `inputs` entry may name
     one."""
-    stack = api.bind(running).stack
+    stack = bind(*worktree(running))[0]
     assert stack is not None
     switch1 = Element(ROOT, "switch", "switch1")
     assert stack.element("switch1", "switch") == switch1
@@ -339,7 +340,7 @@ def test_a_switchs_decision_and_cases_are_resolved_where_they_are_written(
     """Elements: a switch's `switch` is a decision's address, and each value of its `cases` a
     reference, to an input, an output or a switch, which may be pinned. Each is resolved, its
     switch its owner: `switch` first, then each case in the order written, keyed by its option."""
-    stack = api.bind(repository(tmp_path, NESTED_FILES)).stack
+    stack = bind(*worktree(repository(tmp_path, NESTED_FILES)))[0]
     assert stack is not None
     outer = Element(ROOT, "switch", "outer")
     written = [r for r in stack.resolutions if r.owner == outer]
@@ -1629,7 +1630,7 @@ def test_a_switch_of_an_analysis_from_a_commit_takes_the_case_written_there(
     changed = LIB.replace("cases: {a: one}", "cases: {a: two}")
     repository(top, {"astra.yaml": FROM_COMMIT % commit, "lib/astra.yaml": changed})
     assert found(api.validate(top)) == []
-    stack = api.bind(top).stack
+    stack = bind(*worktree(top))[0]
     assert stack is not None
     lib = Identity("lib", commit)
     (entry,) = [r for r in stack.resolutions if r.field == "inputs" and r.written == "lib.sw"]

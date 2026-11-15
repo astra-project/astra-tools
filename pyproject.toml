@@ -1,7 +1,7 @@
 [project]
 name = "astra-tools"
 dynamic = ["version"]
-description = "Validator, checker and a runner's building blocks for ASTRA v0.1 analyses."
+description = "Validator, resolver and checker for ASTRA v0.1 analyses, with the record format a runner writes."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
@@ -10,6 +10,7 @@ authors = [
     { name = "Francois Lanusse", email = "francois.lanusse@cnrs.fr" },
     { name = "Liam Parker", email = "lhparker@berkeley.edu" },
     { name = "Cail Daley", email = "cail.daley@cea.fr" },
+    { name = "Tom Charnock", email = "tom@charnock.fr" },
 ]
 keywords = [
     "astra",
@@ -70,6 +71,9 @@ dev = [
     "ruff >= 0.9",
     "mypy >= 1.15",
     "types-jsonschema >= 4.23",
+]
+docs = [
+    "zensical >= 0.0.33",
 ]
 
 [build-system]

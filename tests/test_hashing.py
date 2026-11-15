@@ -6,10 +6,11 @@ import hashlib
 import os
 from pathlib import Path
 
-from astra import cache, hashing
-from astra.sources.git import Repository
-from astra.sources.reader import CommitReader, WorktreeReader
-from astra.sources.remote import Remotes
+from astra._internal.results import hashing
+from astra._internal.sources import cache
+from astra._internal.sources.git import Repository
+from astra._internal.sources.reader import CommitReader, WorktreeReader
+from astra._internal.sources.remote import Remotes
 from tests.conftest import git, repository
 
 DATA = b"a,b\n1,2\n"

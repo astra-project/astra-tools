@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from astra import contract, load, rules, validate
-from astra.diagnostics import OWN, Catalogue, Location
+from astra._internal.analysis import rules, validate
+from astra._internal.documents import contract, load
+from astra._internal.documents.catalogue import OWN, Catalogue
+from astra.model.diagnostic import Location
 
 AT = Location("astra.yaml", "", None, None)
 

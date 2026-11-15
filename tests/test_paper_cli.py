@@ -1,5 +1,5 @@
-"""The `astra paper` commands, as astra-tools 0.2 had them: a paper kept from a local PDF is
-listed, shown, found by its path, and its quotes verified from JSON on stdin."""
+"""The `astra paper` commands: a paper kept from a local PDF is listed, shown and found by its
+path, and quotes are sought in it, one given as an option or several as JSON on stdin."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
-from astra import cache
+from astra import api
+from astra._internal.sources import cache
 from astra.cli import main
+from astra.model import to_json
 from tests.conftest import MINIMAL, analysis, git_init
 
 DOI = "10.9999/example"
@@ -80,46 +82,87 @@ def test_a_paper_added_from_a_pdf_is_listed_shown_and_found(home: Path) -> None:
     assert astra("paper", "show", DOI).exit_code == 1
 
 
-def test_verify_quotes_reads_json_on_stdin_and_writes_json(home: Path) -> None:
+def test_verify_quotes_reads_evidence_items_on_stdin_and_writes_each_status(home: Path) -> None:
+    """Each item has the `quote` and `location` of an evidence item, and each status is what
+    `api.verify_quote` gives, in the same order."""
     source = home / "paper.pdf"
-    source.write_bytes(pdf(TEXT))
+    source.write_bytes(pdf("An unrelated first page of introduction.", TEXT))
     assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
-    quotes = {"quotes": [{"text": "reduce the influence of outliers", "page": 1}]}
+    exact = "reduce the influence of outliers"
+    quotes: list[dict[str, dict[str, str]]] = [
+        {"quote": {"exact": exact}, "location": {"value": "page=2"}}
+    ]
     result = astra("paper", "verify-quotes", DOI, stdin=json.dumps(quotes))
     assert result.exit_code == 0
-    output = json.loads(result.stdout)
-    assert output["summary"] == {"total": 1, "verified": 1, "not_found": 0, "errors": 0}
-    assert (output["results"][0]["status"], output["results"][0]["found_pages"]) == (
-        "verified",
-        [1],
-    )
-    quotes["quotes"].append({"text": "a sentence the paper never says anywhere at all"})
+    assert json.loads(result.stdout) == [{"state": "found", "page": 2}]
+    quotes += [
+        {"quote": {"exact": "a sentence the paper never says anywhere at all"}},
+        {"quote": {"exact": exact, "prefix": "estimators "}, "location": {"value": "page=1"}},
+    ]
     result = astra("paper", "verify-quotes", DOI, stdin=json.dumps(quotes))
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["summary"]["not_found"] == 1
+    assert json.loads(result.stdout) == [
+        {"state": "found", "page": 2},
+        {"state": "not_found"},
+        {"state": "elsewhere", "page": 2},
+    ]
+    status = api.verify_quote(
+        DOI, api.TextQuoteSelector(exact), location=api.FragmentSelector("page=2")
+    )
+    assert json.loads(result.stdout)[0] == to_json(status)
+    assert astra("paper", "verify-quotes", DOI, stdin="[]").stdout.strip() == "[]"
+
+
+def test_verify_quote_prints_one_status(home: Path) -> None:
+    source = home / "paper.pdf"
+    source.write_bytes(pdf("An unrelated first page of introduction.", TEXT))
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
     one = astra("paper", "verify-quote", DOI, "-q", "influence of outliers", "--json")
-    assert one.exit_code == 0 and json.loads(one.stdout)["status"] == "verified"
+    assert one.exit_code == 0 and json.loads(one.stdout) == {"state": "found", "page": 2}
+    shown = astra("paper", "verify-quote", DOI, "-q", "influence of outliers", "--page", "2")
+    assert shown.exit_code == 0 and "Found on page 2" in shown.stdout
+    off = astra("paper", "verify-quote", DOI, "-q", "influence of outliers", "-p", "1", "--json")
+    assert off.exit_code == 1 and json.loads(off.stdout) == {"state": "elsewhere", "page": 2}
+    shown = astra("paper", "verify-quote", DOI, "-q", "influence of outliers", "-p", "1")
+    assert shown.exit_code == 1 and "Not on page 1: the quote is on page 2" in shown.stdout
+    never = astra("paper", "verify-quote", DOI, "-q", "a sentence the paper never says", "--json")
+    assert never.exit_code == 1 and json.loads(never.stdout) == {"state": "not_found"}
 
 
-def test_verify_quotes_no_input(home: Path) -> None:
-    result = astra("paper", "verify-quotes", "10.1234/test", stdin="")
+@pytest.mark.parametrize(
+    "stdin",
+    [
+        "",
+        "not valid json{",
+        json.dumps({"quotes": [{"text": "a quote"}]}),
+        json.dumps([{"text": "a quote"}]),
+        json.dumps([{"quote": {"text": "a quote"}}]),
+        json.dumps([{"quote": {"exact": "a quote"}, "location": {"page": 2}}]),
+    ],
+)
+def test_verify_quotes_takes_only_a_list_of_quotes(home: Path, stdin: str) -> None:
+    result = astra("paper", "verify-quotes", DOI, stdin=stdin)
     assert result.exit_code == 2
-    assert "No input" in json.loads(result.stdout)["error"]
+    assert result.stdout == ""
+    assert "the input isn't a JSON list of quotes" in result.stderr
 
 
-def test_verify_quotes_invalid_json(home: Path) -> None:
-    result = astra("paper", "verify-quotes", "10.1234/test", stdin="not valid json{")
-    assert result.exit_code == 2
-    assert "Invalid JSON" in json.loads(result.stdout)["error"]
-
-
-def test_verify_quotes_paper_not_cached(home: Path) -> None:
-    quotes = json.dumps({"quotes": [{"text": "some quote"}]})
+def test_a_quote_of_a_paper_that_isnt_cached_has_no_paper(home: Path) -> None:
+    quotes = json.dumps([{"quote": {"exact": "some quote"}}])
     result = astra("paper", "verify-quotes", "10.9999/test", "--version", "1", stdin=quotes)
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == [{"state": "no_paper"}]
+    one = astra("paper", "verify-quote", "10.9999/test", "-q", "some quote")
+    assert one.exit_code == 1 and "astra paper add 10.9999/test" in one.stdout
+
+
+def test_a_paper_whose_text_cant_be_read_exits_2(home: Path) -> None:
+    source = home / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\nnothing a PDF reader can make a page of\n")
+    assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
+    result = astra("paper", "verify-quote", DOI, "-q", "some quote", "--json")
     assert result.exit_code == 2
-    output = json.loads(result.stdout)
-    assert (output["doi"], output["version"]) == ("10.9999/test", 1)
-    assert "not in cache" in output["error"] and "summary" in output
+    assert result.stdout == "" and "can't be read" in result.stderr
 
 
 def test_the_papers_are_kept_in_the_astra_cache(home: Path) -> None:
@@ -129,7 +172,7 @@ def test_the_papers_are_kept_in_the_astra_cache(home: Path) -> None:
     assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
     kept = Path(astra("paper", "path", DOI).stdout.strip())
     assert kept.is_relative_to(cache.root() / "papers")
-    quotes = json.dumps({"quotes": [{"text": "influence of outliers"}]})
+    quotes = json.dumps([{"quote": {"exact": "influence of outliers"}}])
     assert astra("paper", "verify-quotes", DOI, stdin=quotes).exit_code == 0
     assert (cache.root() / "text_cache").is_dir()
 
@@ -178,7 +221,8 @@ def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
     folder = analysis(folder, MINIMAL + INSIGHT.format(quote="a sentence the paper never says"))
     result = astra("validate", str(folder), "-e", "--json")
     assert result.exit_code == 1
-    (report,) = json.loads(result.stdout)["reports"]
+    report = json.loads(result.stdout)
+    assert report["valid"] is False
     (diagnostic,) = report["diagnostics"]
     assert (diagnostic["code"], diagnostic["level"]) == ("EVIDENCE_QUOTE_NOT_FOUND", "error")
     assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/quote"
@@ -186,7 +230,7 @@ def test_validate_reports_evidence_as_it_reports_rules(home: Path) -> None:
 
 
 def test_a_wrong_quote_fails_every_time_it_is_verified(home: Path) -> None:
-    """A failure isn't taken from the verification cache as a success."""
+    """Each run seeks the quote again: nothing remembers an earlier answer."""
     source = home / "paper.pdf"
     source.write_bytes(pdf(TEXT))
     assert astra("paper", "add", DOI, "--pdf", str(source)).exit_code == 0
@@ -213,6 +257,77 @@ def test_a_quote_is_sought_on_the_page_its_location_gives(home: Path) -> None:
     assert "on page 1, where its location places it (it is on page 2)" in wrong.stdout
     analysis(folder, text + "        location: {value: page=9}\n")
     beyond = astra("validate", str(folder), "-e")
-    assert beyond.exit_code == 1 and "the PDF has 2 page(s)" in beyond.stdout
+    assert beyond.exit_code == 1
+    assert "on page 9, where its location places it (it is on page 2)" in beyond.stdout
     analysis(folder, text + "        location: {value: page=2}\n")
     assert astra("validate", str(folder), "-e").exit_code == 0  # not the cached failure
+
+
+def test_validate_seeks_quotes_as_the_api_does(home: Path) -> None:
+    """`astra validate -e` and `api.verify_quote` are one check: each evidence's fields go
+    to the function as they are written, and its answer is the report's."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf("An unrelated first page of introduction.", TEXT))
+    api.add_paper(DOI, pdf=source)
+    quote = api.TextQuoteSelector("influence of outliers")
+    for location, state in (("page=2", "found"), ("page=1", "elsewhere")):
+        text = MINIMAL + INSIGHT.format(quote=quote.exact)
+        folder = analysis(
+            git_init(home / state), text + f"        location: {{value: {location}}}\n"
+        )
+        status = api.verify_quote(DOI, quote, location=api.FragmentSelector(location))
+        assert status.state == state
+        assert (astra("validate", str(folder), "-e").exit_code == 0) == (state == "found")
+
+
+FINDINGS = """\
+findings:
+  best:
+    claim: The result is best.
+    evidence:
+      - artifact: result
+      - doi: "10.9999/example"
+        quote:
+          exact: "influence of outliers"
+      - doi: "10.9999/example"
+"""
+
+
+def test_validate_verifies_findings_and_skips_what_has_no_quote_to_seek(home: Path) -> None:
+    """Findings are verified as prior insights are. Evidence that cites an output has no
+    paper, and evidence with no quote nothing to seek: each is counted, and neither fails."""
+    source = home / "paper.pdf"
+    source.write_bytes(pdf(TEXT))
+    api.add_paper(DOI, pdf=source)
+    folder = analysis(git_init(home / "repo"), MINIMAL + FINDINGS)
+    result = astra("validate", str(folder), "-e")
+    assert result.exit_code == 0, result.output
+    assert "Evidence (findings): 1/3 verified, 1 SKIPPED (artifact), 1 skipped" in result.stdout
+    hinted = astra("validate", str(folder))
+    assert "Run with --verify-evidence to verify quotes exist in papers." in hinted.stdout
+    assert "--verify-evidence" not in astra("validate", str(folder), "--skip-evidence").stdout
+    assert json.loads(astra("validate", str(folder), "-e", "--json").stdout)["diagnostics"] == []
+
+
+def test_validate_reports_a_paper_whose_text_cant_be_read(home: Path) -> None:
+    source = home / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4\nnothing a PDF reader can make a page of\n")
+    api.add_paper(DOI, pdf=source)
+    folder = analysis(git_init(home / "repo"), MINIMAL + INSIGHT.format(quote="some quote"))
+    result = astra("validate", str(folder), "-e", "--json")
+    assert result.exit_code == 1
+    (diagnostic,) = json.loads(result.stdout)["diagnostics"]
+    assert diagnostic["code"] == "EVIDENCE_PAPER_UNREADABLE"
+    assert diagnostic["location"]["pointer"] == "/prior_insights/robust/evidence/0/doi"
+
+
+def test_validate_stops_as_any_command_does_where_the_cache_cant_be_used(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A paper cache that can't be used is a broken environment, not a bug in astra-tools."""
+    folder = analysis(git_init(home / "repo"), MINIMAL + INSIGHT.format(quote="some quote"))
+    monkeypatch.setenv("ASTRA_CACHE_DIR", "relative/cache")
+    result = astra("validate", str(folder), "-e")
+    assert result.exit_code == 2
+    assert result.stderr.startswith("astra: ASTRA_CACHE_DIR is the relative path")
+    assert "This is a bug" not in result.stderr

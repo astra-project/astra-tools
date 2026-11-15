@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from astra import api
-from astra.rules import inputs
+from astra._internal.analysis.rules import inputs
 from tests.conftest import MINIMAL, git, repository
 from tests.test_standins import ANNEXED, DVC_FILE
 

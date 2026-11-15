@@ -8,18 +8,21 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import click
 
 from astra.cli import FAILED, environment, write_report
+
+if TYPE_CHECKING:
+    from astra._internal.results.history import History
 
 
 @click.group("history")
 def command() -> None:
     """Show what git holds of the records of an analysis's planned results.
 
-    ADDR is a result's address, as its record gives it (`output1#u1`, `output2`): `astra check`
+    ADDR is a result's address, as its record gives it (`output1#u1`, `output2`): `astra status`
     lists them. PATH is the analysis's folder, the current one by default. A record's versions
     are its file at each commit along HEAD's history that changed it, in the repository that
     holds the analysis the result belongs to. Each command exits 0 when it answers; 1 when the
@@ -34,6 +37,7 @@ def _answering(hint: str) -> Iterator[None]:
     """Stop with exit 1 where the analysis breaks a MUST or what is asked for isn't in git, and
     with exit 2 where `hint`, the argument, names nothing or the analysis can't be read."""
     from astra import api
+    from astra._internal.results.history import NotInHistoryError, RequestError
 
     with environment():
         try:
@@ -41,10 +45,20 @@ def _answering(hint: str) -> Iterator[None]:
         except api.InvalidAnalysisError as error:
             write_report(error.report, False)
             raise click.exceptions.Exit(FAILED) from None
-        except api.RequestError as error:
+        except RequestError as error:
             raise click.BadParameter(str(error), param_hint=hint) from None
-        except api.NotInHistoryError as error:
+        except NotInHistoryError as error:
             _missing(str(error))
+
+
+def _history(path: Path | None) -> History:
+    """The history of the records of the analysis in `path`, a valid one."""
+    from astra._internal.analysis.resolve import read
+    from astra._internal.results.history import History
+    from astra._internal.sources.remote import Remotes
+
+    remotes = Remotes()
+    return History(read(path, remotes), remotes)
 
 
 def _missing(message: str) -> NoReturn:
@@ -59,11 +73,10 @@ def _missing(message: str) -> NoReturn:
 def timeline(address: str, path: Path | None) -> None:
     """Show each version of the record of the result at ADDR, newest first: the commit that
     changed it, and the hash, size, commit, end and environment it gives."""
-    from astra import api
     from astra.cli.text.history import show_versions
 
     with _answering("ADDR"):
-        versions = api.history(path).timeline(address)
+        versions = _history(path).timeline(address)
     if not versions:
         _missing(f"no record of `{address}` is in HEAD's history")
     show_versions(versions)  # text alone
@@ -78,16 +91,15 @@ def lineage(address: str, path: Path | None, used_by: bool) -> None:
     with the hash and size recorded and, for a planned result, the version of its record that
     gives them, and what that was made from, down to the input files. With --used-by, the
     planned results whose records at HEAD list it instead."""
-    from astra import api
     from astra.cli.text.history import show_lineage
-    from astra.records import Record
+    from astra.model.provenance_record import ProvenanceRecord
 
     with _answering("ADDR"):
-        found = api.history(path).lineage(address, used_by=used_by)
+        found = _history(path).lineage(address, used_by=used_by)
     if found.version is None:
         _missing(f"no record of `{address}` is in HEAD's history")
     show_lineage(found, used_by)  # text alone
-    if not isinstance(found.version.record, Record):
+    if not isinstance(found.version.record, ProvenanceRecord):
         raise click.exceptions.Exit(FAILED)
 
 
@@ -98,13 +110,12 @@ def lineage(address: str, path: Path | None, used_by: bool) -> None:
 def find(path: Path | None, content_hash: str | None, iri: str | None) -> None:
     """Show the versions of the planned results' records whose bytes have the hash H, or whose
     environment is IRI."""
-    from astra import api
     from astra.cli.text.history import show_versions
 
     if (content_hash is None) == (iri is None):
         raise click.UsageError("give one of --hash H and --environment IRI")
     with _answering("--hash"):
-        versions = api.history(path).find(content_hash=content_hash, environment=iri)
+        versions = _history(path).find(content_hash=content_hash, environment=iri)
     if not versions:
         _missing(f"no version of a planned result's record has {content_hash or iri}")
     show_versions(versions)  # text alone
@@ -117,11 +128,9 @@ def get(asked: str, path: Path | None) -> None:
     """Write to stdout the bytes the result at ADDR had at the commit REV names (a commit, a
     branch, a tag) in the repository that holds its analysis: those at its default place there,
     checked against its record there."""
-    from astra import api
-
     address, at, revision = asked.partition("@")  # an address holds no `@`
     if not (address and at and revision):
         raise click.BadParameter("give a result's address and a revision", param_hint="ADDR@REV")
     with _answering("ADDR@REV"):
-        data = api.history(path).get(address, revision)
+        data = _history(path).get(address, revision)
     click.echo(data, nl=False)  # bytes, written as they are
