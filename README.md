@@ -56,18 +56,18 @@ is built and current.
 
 | Command | What it does |
 |---|---|
-| [`astra init`](https://astra-spec.org/0.1.0rc1/cli/#astra-init) | Make a minimal analysis, or complete one (idempotent) |
-| [`astra validate`](https://astra-spec.org/0.1.0rc1/cli/#astra-validate) | Validate an analysis and its whole stack, or every analysis under the current folder |
-| [`astra info`](https://astra-spec.org/0.1.0rc1/cli/#astra-info) | Show an analysis in brief |
-| [`astra view`](https://astra-spec.org/0.1.0rc1/cli/#astra-view) | Show the analysis as it is in one universe |
-| [`astra check`](https://astra-spec.org/0.1.0rc1/cli/#astra-check) | Check the records and bytes of the planned results |
-| [`astra history`](https://astra-spec.org/0.1.0rc1/cli/#astra-history) | Show what git holds of a result's records over time |
-| [`astra spec`](https://astra-spec.org/0.1.0rc1/cli/#astra-spec) | Describe the fields of ASTRA files |
-| [`astra schema`](https://astra-spec.org/0.1.0rc1/cli/#astra-schema) | Show or export the LinkML schemas |
-| [`astra guide`](https://astra-spec.org/0.1.0rc1/cli/#astra-guide) | Print the guide for agents |
-| [`astra paper`](https://astra-spec.org/0.1.0rc1/cli/#astra-paper) | Keep papers by DOI, and verify quotes in them |
+| [`astra init`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-init) | Make a minimal analysis, or complete one (idempotent) |
+| [`astra validate`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-validate) | Validate an analysis and its whole stack, or every analysis under the current folder |
+| [`astra info`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-info) | Show an analysis in brief |
+| [`astra view`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-view) | Show the analysis as it is in one universe |
+| [`astra check`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-check) | Check the records and bytes of the planned results |
+| [`astra history`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-history) | Show what git holds of a result's records over time |
+| [`astra spec`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-spec) | Describe the fields of ASTRA files |
+| [`astra schema`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-schema) | Show or export the LinkML schemas |
+| [`astra guide`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-guide) | Print the guide for agents |
+| [`astra paper`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-paper) | Keep papers by DOI, and verify quotes in them |
 
-The [CLI reference](https://astra-spec.org/0.1.0rc1/cli/) gives
+The [CLI reference](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md) gives
 each command's options, exit codes and examples. The
 [specification](https://astra-spec.org/0.1/) says what an analysis means and what each rule asks.
 
@@ -128,101 +128,24 @@ every field under its name, an optional one left out where it has no value, neve
 list or a map always there. `astra validate --json`, `astra info --json` and
 `astra check --json` print the three reports exactly so.
 
-For this analysis, in a repository with nothing built yet:
+## Documentation
 
-```yaml
-spec_version: "0.1.0"
-label: Example
-inputs:
-  catalog: {path: data/catalog.csv}
-decisions:
-  method:
-    options: {ols: {}, robust: {}}
-outputs:
-  fit:
-    type: metric
-    format: json
-    inputs: [catalog]
-    decisions: [method]
-    recipe:
-      command: python fit.py {inputs.catalog} {decisions.method} {output}
-universes:
-  baseline:
-    decisions: {method: ols}
+The documentation is in [`docs/`](https://github.com/astra-project/astra-tools/blob/main/docs), written for
+[Zensical](https://zensical.org/):
+
+| Page | What it holds |
+|---|---|
+| [CLI reference](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md) | Every command: its arguments, options, output and exit codes |
+| [Python API](https://github.com/astra-project/astra-tools/blob/main/docs/api.md) | The functions of `astra.api`, what they raise, and a runner in brief |
+| [Data model](https://github.com/astra-project/astra-tools/blob/main/docs/data-model.md) | Every class field by field, with UML diagrams and the JSON of each report |
+
+```bash
+uv run --frozen --group docs zensical serve    # preview at http://localhost:8000
+uv run --frozen --group docs zensical build --strict
 ```
 
-`validate` gives:
-
-```json
-{"root": "astra.yaml", "valid": true, "diagnostics": [], "unchecked": []}
-```
-
-`resolve` gives:
-
-```json
-{
-  "spec_version": "0.1.0",
-  "analyses": [
-    {
-      "key": "", "folder": ".", "label": "Example", "tags": [], "declares": {},
-      "inputs": [{"ref": "inputs.catalog", "path": "data/catalog.csv", "tags": []}],
-      "decisions": [
-        {
-          "ref": "decisions.method",
-          "options": [
-            {"id": "ols", "tags": [], "insights": []},
-            {"id": "robust", "tags": [], "insights": []}
-          ],
-          "tags": []
-        }
-      ],
-      "outputs": [
-        {"ref": "outputs.fit", "type": "metric", "format": "json", "tags": [],
-         "decisions": ["decisions.method"]}
-      ],
-      "prior_insights": [], "findings": [],
-      "universes": [
-        {"ref": "universes.baseline", "selection": {"decisions.method": "ols"}, "tags": []}
-      ]
-    }
-  ],
-  "results": [
-    {
-      "id": "fit#baseline", "output": "outputs.fit",
-      "places": [
-        {"address": "fit#baseline", "record_path": ".astra/records/baseline/fit.json",
-         "bytes_path": "results/baseline/fit.json"}
-      ],
-      "universe": "universes.baseline",
-      "inputs": [{"entry": "catalog", "input": "inputs.catalog"}],
-      "command": "python fit.py data/catalog.csv ols results/baseline/fit.json"
-    }
-  ],
-  "notes": []
-}
-```
-
-`check` gives that again as its `analysis`, and beside it:
-
-```json
-{
-  "statuses": {
-    "fit#baseline": {
-      "state": "missing", "bytes": "absent",
-      "why": [
-        {
-          "code": "MISSING_RECORD", "level": "error",
-          "message": "no record is at .astra/records/baseline/fit.json: build `fit#baseline`, and record it there",
-          "location": {"file": ".astra/records/baseline/fit.json", "pointer": ""},
-          "related": []
-        }
-      ],
-      "stale_inputs": []
-    }
-  },
-  "evidence": []
-}
-```
+`tests/test_docs.py` keeps the pages in step with the code: every command and option, every
+function and parameter, every class and field, and each example run against astra-tools.
 
 ## Development
 

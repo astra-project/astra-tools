@@ -52,3 +52,20 @@ jobs:
 
       - name: Run ruff format check
         run: uv run --frozen ruff format --check src/ tests/
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out astra-tools
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs reads the version from the tags
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Build the documentation
+        run: uv run --frozen --group docs zensical build --strict

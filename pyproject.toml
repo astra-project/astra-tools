@@ -10,6 +10,7 @@ authors = [
     { name = "Francois Lanusse", email = "francois.lanusse@cnrs.fr" },
     { name = "Liam Parker", email = "lhparker@berkeley.edu" },
     { name = "Cail Daley", email = "cail.daley@cea.fr" },
+    { name = "Tom Charnock", email = "tom@charnock.fr" },
 ]
 keywords = [
     "astra",
@@ -70,6 +71,9 @@ dev = [
     "ruff >= 0.9",
     "mypy >= 1.15",
     "types-jsonschema >= 4.23",
+]
+docs = [
+    "zensical >= 0.0.33",
 ]
 
 [build-system]
