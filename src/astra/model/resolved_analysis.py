@@ -132,14 +132,16 @@ class FragmentSelector:
 
 @dataclass(frozen=True)
 class Evidence:
-    """What a claim rests on: a work, by its `doi`, or the results of an output, in `cites`."""
+    """What a claim rests on: a work by DOI, or an artifact address and its cited results."""
 
     doi: str | None = None
     version: int | None = None
     cites: tuple[str, ...] | None = None  # for evidence that cites an output, the id of each
-    # result it cites (Results *Evidence*): none where the output has no result
+    # result it cites (Results *Evidence*): empty where no result is planned; None for a DOI
     quote: TextQuoteSelector | None = None
     location: FragmentSelector | None = None
+    artifact: str | None = None  # the authored address, scoped to the insight's analysis;
+    # retained even where no result is planned, including a switch or a universe pin
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,9 @@ class ResolvedAnalysis:
     # not, by key
     results: tuple[Result, ...]  # each after every result it reads
     notes: tuple[Diagnostic, ...] = ()  # what an author may want to tidy, which breaks no rule
+    schema_version: Literal["astra-tools.resolved-analysis.v1"] = field(
+        default="astra-tools.resolved-analysis.v1", init=False
+    )
 
     def to_json(self) -> dict[str, Any]:
         """The model as JSON (`astra.model.to_json`)."""

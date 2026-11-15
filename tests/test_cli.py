@@ -87,6 +87,7 @@ def test_validate_json_of_a_file_is_its_validation_report(tmp_path: Path, outsid
         "valid": True,
         "diagnostics": [],
         "unchecked": [],
+        "schema_version": "astra-tools.validation-report.v1",
     }
 
 

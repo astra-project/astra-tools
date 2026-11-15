@@ -21,7 +21,7 @@ at its place hash to its record's, and `absent` otherwise.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from astra.model import to_json
@@ -77,6 +77,9 @@ class StatusReport:
     statuses: Mapping[str, Status]
     evidence: tuple[EvidenceStatus, ...]
     inputs: Mapping[str, Bytes]  # where each input's content is, by the input's ref
+    schema_version: Literal["astra-tools.status-report.v1"] = field(
+        default="astra-tools.status-report.v1", init=False
+    )
 
     def to_json(self) -> dict[str, Any]:
         """The report as JSON (`astra.model.to_json`)."""
