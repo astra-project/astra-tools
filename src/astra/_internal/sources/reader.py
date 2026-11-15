@@ -82,6 +82,17 @@ def in_repository(reader: Reader, folder: str, path: str) -> tuple[Repository, s
     return repo, posixpath.join(inner, posixpath.relpath(path, folder or "."))
 
 
+def analysis_below(reader: Reader, folder: str, path: str) -> str | None:
+    """The folder below `folder`, on the way to `path`, a tidied path from it, that holds an
+    `astra.yaml` file of its own, the outermost; None where none does."""
+    parts = path.split("/")[:-1]
+    for count in range(1, len(parts) + 1):
+        inner = posixpath.join(folder, *parts[:count])
+        entry = reader.stat(posixpath.join(inner, "astra.yaml"))
+        if entry is not None and entry.kind == "file":
+            return inner
+    return None
+
 
 @dataclass(frozen=True)
 class WorktreeReader:

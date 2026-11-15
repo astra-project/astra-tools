@@ -7,7 +7,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.text import Text
 
-from astra._internal.results.hashing import Digest
+from astra._internal.results.hashing import Digest, recorded
 from astra._internal.results.history import Lineage, Link, Version
 from astra.cli.text import console, rule_line
 from astra.model.provenance_record import ProvenanceRecord
@@ -58,7 +58,7 @@ def _version(out: Console, version: Version) -> None:
             out.print(Text("  ").append_text(said))
     else:
         run = record.generated_by
-        out.print(Text(f"    bytes        {_digest(Digest(record.content_hash, record.size))}"))
+        out.print(Text(f"    bytes        {_digest(recorded(record))}"))
         out.print(Text(f"    made at      {run.commit}"))
         if run.finished is not None:
             out.print(Text(f"    finished     {run.finished}"))
