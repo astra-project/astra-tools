@@ -41,9 +41,9 @@ from astra._internal.analysis.validate import validated
 from astra._internal.documents import document
 from astra._internal.documents.grammar import TEMPLATE, fill
 from astra._internal.sources import paths
-from astra._internal.sources.reader import CommitReader, worktree
+from astra._internal.sources.reader import worktree
 from astra._internal.sources.remote import Remotes
-from astra.errors import InvalidAnalysisError, NoAnalysisError, RequestError
+from astra.errors import InvalidAnalysisError
 from astra.model.diagnostic import Diagnostic
 from astra.model.resolved_analysis import (
     Analysis,
@@ -72,23 +72,12 @@ class Resolved:
     planned: Mapping[str, Planned]  # behind each result, by id, in the results' order
 
 
-def read(path: str | os.PathLike[str] | None, remotes: Remotes, at: str | None = None) -> Resolved:
+def read(path: str | os.PathLike[str] | None, remotes: Remotes) -> Resolved:
     """The analysis whose folder is `path`, the current folder by default, resolved: read in the
-    working tree of the git repository that holds it or, with `at`, a revision of that
-    repository, as it is at that commit. Raises NoAnalysisError where there is no analysis,
-    RequestError where `at` names no commit, InvalidAnalysisError where the analysis breaks a
-    `MUST`, GitError where git can't be run, CacheError where the cache can't be used, and
-    OSError where a file can't be read."""
-    reader, root = worktree(path)
-    if at is not None and reader.repo is not None:
-        commit = reader.repo.commit(at)
-        if commit is None:
-            raise RequestError(f"`{at}` names no commit of {reader.repo.top}")
-        reader = CommitReader(reader.repo, commit, None, remotes)
-        entry = reader.stat(posixpath.join(root, "astra.yaml"))
-        if entry is None or entry.kind != "file":
-            raise NoAnalysisError(f"{root or '.'} has no astra.yaml file at {commit}")
-    report, context = validated(reader, root, remotes)
+    working tree of the git repository that holds it. Raises NoAnalysisError where there is no
+    analysis, InvalidAnalysisError where the analysis breaks a `MUST`, GitError where git can't
+    be run, CacheError where the cache can't be used, and OSError where a file can't be read."""
+    report, context = validated(*worktree(path), remotes)
     if not report.valid:
         raise InvalidAnalysisError(report)
     assert context is not None  # a valid analysis has a stack
@@ -102,8 +91,11 @@ def resolve(context: Context) -> Resolved:
     ordered = _ordered(context)
     ids = {at: _id(stack, keys, planned) for at, planned in ordered.items()}
     builder = _Builder(context, keys, ids)
+    repo = stack.analyses[stack.root].reader.repo
+    assert repo is not None  # NOT_IN_REPOSITORY
     analysis = ResolvedAnalysis(
         stack.analysis(stack.root).spec_version,
+        repo.head(),
         tuple(builder.analysis(identity) for identity in sorted(keys, key=keys.__getitem__)),
         tuple(builder.result(planned) for planned in ordered.values()),
         tuple(_notes(context)),

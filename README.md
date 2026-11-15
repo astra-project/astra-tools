@@ -60,7 +60,7 @@ is built and current.
 | [`astra validate`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-validate) | Validate an analysis and its whole stack, or every analysis under the current folder |
 | [`astra info`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-info) | Show an analysis in brief |
 | [`astra view`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-view) | Show the analysis as it is in one universe |
-| [`astra status`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-status) | Check the records and bytes of the planned results |
+| [`astra status`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-status) | Show how each result stands: its record and its bytes |
 | [`astra history`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-history) | Show what git holds of a result's records over time |
 | [`astra spec`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-spec) | Describe the fields of ASTRA files |
 | [`astra schema`](https://github.com/astra-project/astra-tools/blob/main/docs/cli.md#astra-schema) | Show or export the LinkML schemas |
@@ -82,7 +82,7 @@ from astra import api
 
 api.validate(folder)            # is it valid: every rule it breaks, and where
 analysis = api.resolve(folder)  # what it means, with every rule of the specification applied
-report = api.status(folder)     # how its results stand: the analysis again, and each status
+report = api.status(folder)     # how its results stand: each result's status, by its id
 
 api.init_analysis(folder)       # an empty analysis where the folder has none; safe to call again
 api.write_records(folder, result, content_hash, size, generated_by)
@@ -99,10 +99,14 @@ and not what they start from, so it has no switch, no `derived_from` and no temp
 fact once, so a reference is an id (`outputs.fit`, `stage.decisions.method`, `fit#baseline`).
 
 That is what a runner builds on. It decides itself what to build, in what order and where. A
-status report gives it one status for each result: what the result itself breaks (`why`), and
+status report gives it one status for each of those results, by the result's id: what the result itself breaks (`why`), and
 which entries read a result that isn't unchanged (`stale_inputs`), so that it can tell, once it
 has rebuilt those, whether a result that only read them needs building too. What its run made it
 writes with `write_records`, a record at each of the result's places.
+
+The status report holds none of the analysis. `resolve` and `status` each give `head`, the
+commit the repository was on, so a runner that asks for both can tell that nothing was committed
+between the two.
 
 The paper functions are apart from the rest: the paper cache is a folder of this machine,
 `add_paper` uses the network, and matching a quote against a PDF's text is astra-tools' own, as

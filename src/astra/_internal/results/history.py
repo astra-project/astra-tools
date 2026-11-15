@@ -33,9 +33,13 @@ from astra._internal.results.records import read_record
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import CommitReader, in_repository
 from astra._internal.sources.remote import Remotes
-from astra.errors import RequestError
 from astra.model.diagnostic import Diagnostic
 from astra.model.provenance_record import ProvenanceRecord, RecordedInput
+
+
+class RequestError(ValueError):
+    """What is asked for isn't there: a revision that names no commit, an address that is no
+    planned result's. A usage error."""
 
 
 class NotInHistoryError(Exception):

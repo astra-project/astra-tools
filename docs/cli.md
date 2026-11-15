@@ -13,7 +13,7 @@ reads them.
   breaks no `MUST`. For one that does, they print what `astra validate` prints, and exit 1.
 - **Exit codes:**
     - 0 when the command answers;
-    - 1 when the analysis breaks a `MUST`, a planned result isn't `unchanged`, or what was asked
+    - 1 when the analysis breaks a `MUST`, a result isn't `unchanged`, or what was asked
       for isn't there (no analysis, nothing in git, a paper or a quote);
     - 2 for a usage error, an analysis that can't be read, a broken environment (git or the
       cache unusable, a folder that can't be written), or an internal error.
@@ -68,7 +68,7 @@ universes:
 | [`astra validate`](#astra-validate) | Validate an analysis and its whole stack |
 | [`astra info`](#astra-info) | Show an analysis in brief |
 | [`astra view`](#astra-view) | Show the analysis as it is in one universe |
-| [`astra status`](#astra-status) | Check the records and bytes of the planned results |
+| [`astra status`](#astra-status) | Show how each result stands: its record and its bytes |
 | [`astra history`](#astra-history) | Show what git holds of a result's records over time |
 | [`astra spec`](#astra-spec) | Describe the fields of ASTRA files |
 | [`astra schema`](#astra-schema) | Show or export the LinkML schemas |
@@ -251,11 +251,12 @@ fit#baseline  results/baseline/fit.json
 ## `astra status`
 
 ```text
-astra status [PATH] [--at REV] [--json]
+astra status [PATH] [--json]
 ```
 
-Shows how each planned result stands, by the specification's check rules. For each one it
-checks the record and the bytes:
+Shows how each result of the analysis stands, by the specification's check rules, with the
+records and bytes that are in the working tree. For each result it checks the record and the
+bytes:
 
 - the record is `unchanged`, `stale` (something the result is made from has changed since the
   commit the record names) or `missing`;
@@ -263,18 +264,17 @@ checks the record and the bytes:
 
 Each result is shown with its state, its bytes' and where its record goes, and under it each
 rule it breaks. Then each evidence that cites an output gets the status of what it cites. Exits
-0 when every planned result and evidence is `unchanged`, and 1 otherwise.
+0 when every result and evidence is `unchanged`, and 1 otherwise.
 
 | Option | Meaning |
 |---|---|
-| `--at REV` | Check the analysis as it is at the commit REV names (a commit, a branch, a tag), with its records and bytes there. Exits 2 where REV names no commit |
-| `--json` | Print the [`StatusReport`](data-model.md#statusreport) as JSON, which holds the resolved analysis too |
+| `--json` | Print the [`StatusReport`](data-model.md#statusreport) as JSON: the commit the repository is on, each result's status by its id, and the evidence's |
 
 ```console
 $ astra status
 fit#baseline  missing  absent  .astra/records/baseline/fit.json
   error MISSING_RECORD no record is at .astra/records/baseline/fit.json: build `fit#baseline`, and record it there
-1 planned result(s), 0 unchanged, 0 stale, 1 missing; 1 absent
+1 result(s), 0 unchanged, 0 stale, 1 missing; 1 absent
 ```
 
 An input whose content is kept outside git, behind a stand-in, is compared by the hash the

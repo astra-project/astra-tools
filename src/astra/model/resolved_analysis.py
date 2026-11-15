@@ -137,7 +137,7 @@ class Evidence:
     doi: str | None = None
     version: int | None = None
     cites: tuple[str, ...] | None = None  # for evidence that cites an output, the id of each
-    # planned result it cites (Results *Evidence*): none where no result of it is planned
+    # result it cites (Results *Evidence*): none where the output has no result
     quote: TextQuoteSelector | None = None
     location: FragmentSelector | None = None
 
@@ -196,7 +196,7 @@ class Source:
 
     entry: str  # as the output's `inputs` writes it
     input: str | None = None  # the input it reads, by ref
-    result: str | None = None  # or the planned result it reads, by id
+    result: str | None = None  # or the result it reads, by id
 
 
 @dataclass(frozen=True)
@@ -210,7 +210,8 @@ class Place:
 
 @dataclass(frozen=True)
 class Result:
-    """A planned result (Results *plans*): one output, in one universe or once."""
+    """A result: one output, in one universe or once. The results are those the driving analysis
+    builds and those they read, which the specification says it plans (Results *plans*)."""
 
     id: str
     output: str  # by ref
@@ -228,6 +229,8 @@ class ResolvedAnalysis:
     """An analysis, a valid one, resolved."""
 
     spec_version: str
+    head: str | None  # the commit its repository is on, as HEAD names it: None where it has no
+    # commit yet. It names the commit and not the files, which are read in the working tree
     analyses: tuple[Analysis, ...]  # the driving analysis, then each it declares, directly or
     # not, by key
     results: tuple[Result, ...]  # each after every result it reads

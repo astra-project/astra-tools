@@ -151,11 +151,14 @@ def test_the_json_examples_are_what_the_functions_give(example: Path) -> None:
     text = page("data-model.md")
     (validated,) = blocks(section(text, "### `ValidationReport`"), "json")
     assert json.loads(validated) == api.validate(example).to_json()
+    # The commit shown is the one of the repository the examples were made in.
     (resolved,) = blocks(section(text, "## The resolved analysis"), "json")
-    assert json.loads(resolved) == api.resolve(example).to_json()
-    (checked,) = blocks(section(text, "## The status report"), "json")
-    report = api.status(example).to_json()
-    assert json.loads(checked) == {key: report[key] for key in ("statuses", "evidence")}
+    analysis = api.resolve(example)
+    assert {**json.loads(resolved), "head": analysis.head} == analysis.to_json()
+    (shown,) = blocks(section(text, "## The status report"), "json")
+    report = api.status(example)
+    assert {**json.loads(shown), "head": report.head} == report.to_json()
+    assert report.head == analysis.head
 
 
 def test_the_runner_of_the_api_reference_builds_and_records(example: Path) -> None:

@@ -75,8 +75,7 @@ _WORST: tuple[State, ...] = ("missing", "stale", "unchanged")
 def status(resolved: Resolved, remotes: Remotes | None = None) -> StatusReport:
     """The status of every planned result of `resolved`, and of the root's evidence and each
     item of a declared analysis's evidence that cites a planned result, its records and bytes
-    read where its stack is: in the working tree, or at the commit its root is read at. Commits
-    are got from remotes through `remotes`."""
+    read in the working tree. Commits are got from remotes through `remotes`."""
     context, analysis = resolved.context, resolved.analysis
     checker = _Checker(context, Contract.load(context.catalogue), remotes or Remotes())
     # Of the results from a commit, only those a planned result reads get a bytes status, and
@@ -84,14 +83,14 @@ def status(resolved: Resolved, remotes: Remotes | None = None) -> StatusReport:
     read = {source.result for result in analysis.results for source in result.inputs}
     statuses: dict[str, Status] = {}
     for result, planned in zip(analysis.results, resolved.planned.values(), strict=True):
-        has_bytes = planned.owner.commit == context.stack.root.commit or result.id in read
+        has_bytes = planned.owner.commit is None or result.id in read
         statuses[result.id] = _worst_of(
             [
                 checker.place(result, planned, place, statuses, has_bytes)
                 for place in places(context.stack, planned)
             ]
         )
-    return StatusReport(analysis, statuses, tuple(_evidence(resolved, statuses)))
+    return StatusReport(analysis.head, statuses, tuple(_evidence(resolved, statuses)))
 
 
 def _worst_of(each: list[Status]) -> Status:

@@ -1,4 +1,4 @@
-"""The status report as text: each planned result, by its id, with its statuses and where its
+"""The status report as text: each result, by its id, with its statuses and where its
 record is, then why, as `line:col level CODE message`, each entry that reads a result that
 isn't unchanged, and the environment its record names with the runner that recorded it, which is
 the one to say what that environment holds; then the evidence, by the insight it backs."""
@@ -10,6 +10,7 @@ from types import MappingProxyType
 from rich.text import Text
 
 from astra.cli.text import console, rule_line
+from astra.model.resolved_analysis import ResolvedAnalysis
 from astra.model.status_report import StatusReport
 
 _STYLES = MappingProxyType(
@@ -23,10 +24,10 @@ _STYLES = MappingProxyType(
 )
 
 
-def show(report: StatusReport) -> None:
+def show(analysis: ResolvedAnalysis, report: StatusReport) -> None:
     out = console()
     counts = dict.fromkeys(("unchanged", "stale", "missing", "absent"), 0)
-    for result in report.analysis.results:
+    for result in analysis.results:
         status = report.statuses[result.id]
         line = Text(result.id, style="bold")
         line.append("  ")
@@ -55,6 +56,6 @@ def show(report: StatusReport) -> None:
         for broken in evidence.why:
             out.print(rule_line(broken.location, broken.level, broken.code, broken.message))
     out.print(
-        f"{len(report.statuses)} planned result(s), {counts['unchanged']} unchanged, "
+        f"{len(report.statuses)} result(s), {counts['unchanged']} unchanged, "
         f"{counts['stale']} stale, {counts['missing']} missing; {counts['absent']} absent"
     )

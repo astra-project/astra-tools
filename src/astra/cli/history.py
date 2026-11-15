@@ -37,7 +37,7 @@ def _answering(hint: str) -> Iterator[None]:
     """Stop with exit 1 where the analysis breaks a MUST or what is asked for isn't in git, and
     with exit 2 where `hint`, the argument, names nothing or the analysis can't be read."""
     from astra import api
-    from astra._internal.results.history import NotInHistoryError
+    from astra._internal.results.history import NotInHistoryError, RequestError
 
     with environment():
         try:
@@ -45,7 +45,7 @@ def _answering(hint: str) -> Iterator[None]:
         except api.InvalidAnalysisError as error:
             write_report(error.report, False)
             raise click.exceptions.Exit(FAILED) from None
-        except api.RequestError as error:
+        except RequestError as error:
             raise click.BadParameter(str(error), param_hint=hint) from None
         except NotInHistoryError as error:
             _missing(str(error))

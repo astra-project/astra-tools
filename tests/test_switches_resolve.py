@@ -534,12 +534,14 @@ def messages(report: api.StatusReport, id_: str) -> list[str]:
     return [diagnostic.message for diagnostic in report.statuses[id_].why]
 
 
-def cited(report: api.StatusReport) -> dict[str, tuple[tuple[str, ...] | None, str]]:
+def cited(
+    resolved: api.ResolvedAnalysis, report: api.StatusReport
+) -> dict[str, tuple[tuple[str, ...] | None, str]]:
     """Each evidence of the driving analysis's findings that cites an output: the insight it
     backs, the results it cites, as the model gives them, and its status."""
     cites = {
         (finding.ref, index): evidence.cites
-        for finding in report.analysis.analyses[0].findings
+        for finding in resolved.analyses[0].findings
         for index, evidence in enumerate(finding.evidence)
     }
     return {e.insight: (cites[e.insight, e.index], e.state) for e in report.evidence}
@@ -590,7 +592,7 @@ def test_another_option_selected_for_a_switchs_decision_makes_its_reader_stale(
         "`sw` switches on `decision1`, which selects `b` in `u1`, where it selected `a` at "
     )
     assert report.statuses["reader#u1"].stale_inputs == ()
-    assert report.analysis.results[1].inputs == (api.Source("sw", result="base"),)
+    assert api.resolve(checked).results[1].inputs == (api.Source("sw", result="base"),)
 
 
 def test_another_case_taken_makes_its_reader_stale(checked: Path) -> None:
@@ -639,10 +641,14 @@ def test_evidence_citing_a_switch_cites_the_case_it_takes_in_each_universe(
     driving analysis's universes of the case the switch takes there, and gets the worst of
     their statuses."""
     report = api.status(checked)
-    assert cited(report) == {"findings.finding1": (("base", "other"), "unchanged")}
+    assert cited(api.resolve(checked), report) == {
+        "findings.finding1": (("base", "other"), "unchanged")
+    }
     (checked / ".astra" / "records" / "other.json").unlink()
     report = api.status(checked)
-    assert cited(report) == {"findings.finding1": (("base", "other"), "missing")}
+    assert cited(api.resolve(checked), report) == {
+        "findings.finding1": (("base", "other"), "missing")
+    }
     (evidence,) = report.evidence
     assert [(d.code, d.level, d.location.file, d.location.pointer) for d in evidence.why] == [
         ("STALE_EVIDENCE", "error", "astra.yaml", "/findings/finding1/evidence/0/artifact")
@@ -657,7 +663,7 @@ def test_evidence_citing_a_switch_that_takes_nothing_is_missing(checked: Path) -
     ) + ("  finding2:\n    claim: The gap is cited.\n    evidence:\n      - artifact: gap\n")
     (checked / "astra.yaml").write_text(text, "utf-8")
     report = api.status(checked)
-    assert cited(report) == {
+    assert cited(api.resolve(checked), report) == {
         "findings.finding1": (("base", "other"), "unchanged"),
         "findings.finding2": ((), "missing"),
     }

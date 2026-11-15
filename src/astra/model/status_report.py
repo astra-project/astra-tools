@@ -1,4 +1,8 @@
-"""The status report: how each planned result of an analysis stands, and its evidence.
+"""The status report: how each result of an analysis stands, and its evidence.
+
+It holds a status for each result of the resolved analysis, by the result's id, and no more of
+the analysis than that: `resolve` gives the analysis. `head` is on both, so a reader that asked
+for each can tell the two were read at the same commit.
 
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where
@@ -15,7 +19,6 @@ from typing import Any, Literal
 from astra.model import to_json
 from astra.model.diagnostic import Diagnostic
 from astra.model.provenance_record import ProvenanceRecord
-from astra.model.resolved_analysis import ResolvedAnalysis
 
 State = Literal["unchanged", "stale", "missing"]
 Bytes = Literal["present", "absent"]
@@ -48,10 +51,11 @@ class EvidenceStatus:
 
 @dataclass(frozen=True)
 class StatusReport:
-    """What checking an analysis found: the analysis as it resolved, each planned result's
-    status by the result's id, and the status of each evidence that cites one."""
+    """How an analysis's results stand: each result's status, by the result's id, and the status
+    of each evidence that cites one."""
 
-    analysis: ResolvedAnalysis
+    head: str | None  # the commit the repository was on when it was read, as
+    # `ResolvedAnalysis.head` gives it
     statuses: Mapping[str, Status]
     evidence: tuple[EvidenceStatus, ...]
 

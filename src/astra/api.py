@@ -7,8 +7,8 @@ recipe, and each answered in plain data that writes as JSON (`astra.model`):
 - `resolve`: what does it mean, with every rule of the specification already applied
   (`ResolvedAnalysis`): its analyses and what they declare, each universe's selection, and its
   planned results, each with its places, what it reads and its command as it runs;
-- `status`: do its results' records still hold (`StatusReport`): the resolved analysis again,
-  and each result's status. It is what the specification's checker answers.
+- `status`: how do its results stand (`StatusReport`): for each result of the resolved
+  analysis, whether its record still holds. It is what the specification's checker answers.
 
 What a tool writes: `init_analysis`, an empty analysis where a folder has none, and
 `write_records`, a result's record at each of its places.
@@ -41,7 +41,6 @@ from astra.errors import (
     InvalidAnalysisError,
     NoAnalysisError,
     PaperError,
-    RequestError,
 )
 from astra.model.diagnostic import Diagnostic, Location
 from astra.model.paper import Paper, QuoteStatus
@@ -98,7 +97,6 @@ __all__ = [
     "ProvenanceRecord",
     "QuoteStatus",
     "RecordedInput",
-    "RequestError",
     "ResolvedAnalysis",
     "Resources",
     "Result",
@@ -139,23 +137,24 @@ def resolve(
     path: str | os.PathLike[str] | None = None, *, offline: bool = False
 ) -> ResolvedAnalysis:
     """The analysis whose folder is `path`, read as `validate` reads it, resolved
-    (`astra.model.resolved_analysis`). Raises InvalidAnalysisError where the analysis breaks a
-    `MUST`, and otherwise as `validate` does."""
+    (`astra.model.resolved_analysis`), with `head`, the commit its repository is on. Raises
+    InvalidAnalysisError where the analysis breaks a `MUST`, and otherwise as `validate`
+    does."""
     return _read(path, _Remotes(offline=offline)).analysis
 
 
-def status(
-    path: str | os.PathLike[str] | None = None, *, at: str | None = None, offline: bool = False
-) -> StatusReport:
-    """The status of the analysis whose folder is `path`, read as `validate` reads it: the
-    analysis as it resolved, each planned result's status by the specification's check rules,
-    and its evidence's (`astra.model.status_report`), so that one call tells a runner both what
-    the results are and how each stands. With `at`, a revision of the repository that holds the
-    analysis (a commit, a branch, a tag), the analysis is read as it is at that commit, with its
-    records and bytes read there. Raises InvalidAnalysisError where the analysis breaks a
-    `MUST`, RequestError where `at` names no commit, and otherwise as `validate` does."""
+def status(path: str | os.PathLike[str] | None = None, *, offline: bool = False) -> StatusReport:
+    """How the results of the analysis whose folder is `path` stand, read as `validate` reads
+    it, with the records and bytes that are in the working tree: the status of each result
+    `resolve` gives, by the result's id and by the specification's check rules, and its
+    evidence's (`astra.model.status_report`).
+
+    The report holds none of the analysis itself: `resolve` gives that. Both give `head`, the
+    commit the repository was on, so a runner that asks for each can tell that nothing was
+    committed between the two. Raises InvalidAnalysisError where the analysis breaks a `MUST`,
+    and otherwise as `validate` does."""
     remotes = _Remotes(offline=offline)
-    return _status(_read(path, remotes, at), remotes)
+    return _status(_read(path, remotes), remotes)
 
 
 def init_analysis(directory: str | os.PathLike[str]) -> None:

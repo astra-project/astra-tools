@@ -19,7 +19,7 @@ from click.testing import CliRunner, Result
 from astra import api
 from astra._internal.analysis.resolve import read
 from astra._internal.results.hashing import Digest, digest_bytes
-from astra._internal.results.history import History, NotInHistoryError, Version
+from astra._internal.results.history import History, NotInHistoryError, RequestError, Version
 from astra._internal.sources.remote import Remotes
 from astra.cli import main
 from astra.model.provenance_record import ProvenanceRecord, RecordedInput
@@ -164,7 +164,7 @@ def test_an_address_names_a_planned_results_place(recorded: Recorded) -> None:
     results' addresses name a universe."""
     kept = history(recorded.top)
     for address in ("output1", "output3", "output1#u3", "decision1"):
-        with pytest.raises(api.RequestError, match="no planned result"):
+        with pytest.raises(RequestError, match="no planned result"):
             kept.timeline(address)
 
 
@@ -301,7 +301,7 @@ def test_get_where_the_bytes_arent_the_recorded_ones(copied: Path) -> None:
 
 
 def test_get_at_a_revision_that_names_no_commit(recorded: Recorded) -> None:
-    with pytest.raises(api.RequestError, match="names no commit"):
+    with pytest.raises(RequestError, match="names no commit"):
         history(recorded.top).get("output1#u1", "nowhere")
 
 

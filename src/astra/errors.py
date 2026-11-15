@@ -21,11 +21,6 @@ class InvalidAnalysisError(Exception):
         self.report = report
 
 
-class RequestError(ValueError):
-    """What is asked for isn't there: a revision that names no commit, an address that is no
-    planned result's. A usage error."""
-
-
 class GitError(Exception):
     """git can't be run: a broken environment, not a broken analysis."""
 

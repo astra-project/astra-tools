@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from astra import api
-from tests.conftest import MINIMAL, git, owner, repository
+from tests.conftest import MINIMAL, analysis, git, git_init, owner, repository
 from tests.spec import SPEC
 from tests.test_planned import ROOT, SUBANALYSIS
 from tests.test_validate import WORKED_EXAMPLE
@@ -144,6 +144,23 @@ def test_the_worked_example_plans_its_three_results_at_their_places(worked: Path
         "'results/output2.csv'"
     )
     assert analysis.notes == ()
+
+
+def test_the_head_is_the_commit_the_repository_is_on(tmp_path: Path) -> None:
+    """HEAD's commit, on the analysis and on its status report alike, and none in a repository
+    with no commit yet. It names the commit, not the files: an edit that isn't committed leaves
+    it as it was."""
+    folder = analysis(git_init(tmp_path))
+    assert api.resolve(folder).head is None and api.status(folder).head is None
+    git(folder, "add", "--all")
+    git(folder, "commit", "--quiet", "--message", "first")
+    first = git(folder, "rev-parse", "HEAD").strip()
+    assert api.resolve(folder).head == api.status(folder).head == first
+    (folder / "astra.yaml").write_text(MINIMAL + "label: Edited\n")
+    edited = api.resolve(folder)
+    assert (edited.head, edited.analyses[0].label) == (first, "Edited")
+    git(folder, "commit", "--quiet", "--all", "--message", "second")
+    assert api.resolve(folder).head == api.status(folder).head != first
 
 
 def test_a_planned_result_pickles_by_itself(worked: Path) -> None:
@@ -1495,7 +1512,7 @@ def test_the_model_writes_as_json_with_no_optional_field_left_null(cited: Path) 
     written = api.resolve(cited).to_json()
     assert json.loads(json.dumps(written)) == written
     assert not nulls(written)
-    assert list(written) == ["spec_version", "analyses", "results", "notes"]
+    assert list(written) == ["spec_version", "head", "analyses", "results", "notes"]
     (root,) = written["analyses"]
     assert root == {
         "key": "",

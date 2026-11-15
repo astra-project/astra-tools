@@ -37,7 +37,8 @@ says how many, and `[0..1]` after a field marks an optional one, `[*]` a list.
 
 ## Overview
 
-The three reports, and what they share.
+The three reports, and what they share. A status report holds none of the analysis: it names
+each result by its id, and `resolve` gives the result.
 
 ```mermaid
 classDiagram
@@ -55,9 +56,9 @@ classDiagram
   ResolvedAnalysis *-- "1..*" Analysis : analyses
   ResolvedAnalysis *-- "*" Result : results
   ResolvedAnalysis *-- "*" Diagnostic : notes
-  StatusReport *-- "1" ResolvedAnalysis : analysis
   StatusReport *-- "*" Status : statuses
   StatusReport *-- "*" EvidenceStatus : evidence
+  StatusReport o-- "*" Result : statuses, by id
   Status *-- "0..1" ProvenanceRecord : record
   Status *-- "*" Diagnostic : why
   EvidenceStatus *-- "*" Diagnostic : why
@@ -167,6 +168,7 @@ classDiagram
   direction LR
   class ResolvedAnalysis {
     spec_version : str
+    head : str [0..1]
   }
   class Analysis {
     key : str
@@ -303,12 +305,18 @@ classDiagram
 | Field | Type | Meaning |
 |---|---|---|
 | `spec_version` | `str` | The driving analysis's `spec_version` |
+| `head` | `str`, optional | The commit the repository is on, as HEAD names it; none where it has no commit yet |
 | `analyses` | list of [`Analysis`](#analysis) | The driving analysis, then each it declares, directly or not, by key |
-| `results` | list of [`Result`](#result) | The planned results, each after every result it reads |
+| `results` | list of [`Result`](#result) | The results, each after every result it reads |
 | `notes` | list of [`Diagnostic`](#diagnostic) | What an author may want to tidy, which breaks no rule |
 
 The notes are `FALLBACK_PIN`, `UNPLANNED_OUTPUT` and `NOT_BUILT`, at the level `note`, and the
 runner rule `CODE_OUTSIDE_ANALYSIS`, a warning.
+
+`head` names the commit, not the files: the analysis is read in the working tree, so where a
+file is edited and not committed, two readings at the same `head` can differ. A
+[`StatusReport`](#statusreport) has the same field, so a reader that asked for both can tell
+that nothing was committed between the two.
 
 ### `Analysis`
 
@@ -427,7 +435,7 @@ What a claim rests on: a work, by its `doi`, or the results of an output, in `ci
 |---|---|---|
 | `doi` | `str`, optional | The work's DOI |
 | `version` | `int`, optional | The work's version |
-| `cites` | list of `str`, optional | For evidence that cites an output, the id of each planned result it cites; empty where no result of it is planned |
+| `cites` | list of `str`, optional | For evidence that cites an output, the id of each result it cites; empty where the output has no result |
 | `quote` | [`TextQuoteSelector`](#textquoteselector), optional | |
 | `location` | [`FragmentSelector`](#fragmentselector), optional | |
 
@@ -464,7 +472,12 @@ A universe of an analysis, with the option it selects for each decision it uses.
 
 ### `Result`
 
-A planned result: one output, in one universe or once.
+A result: one output, in one universe or once.
+
+The results are those of the outputs the driving analysis builds, each in every universe that
+builds it, and the results those read, in whatever analysis they belong to. The specification
+says the analysis *plans* these. An output with no result, such as one of a declared analysis
+that nothing reads, is named in the notes.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -498,7 +511,7 @@ any pin and the case each switch on the way takes. It has `input` or `result`, n
 |---|---|---|
 | `entry` | `str` | The entry, as the output's `inputs` writes it |
 | `input` | `str`, optional | The input it reads, by ref |
-| `result` | `str`, optional | The planned result it reads, by id |
+| `result` | `str`, optional | The result it reads, by id |
 
 ### Example
 
@@ -530,6 +543,7 @@ universes:
 ```json
 {
   "spec_version": "0.1.0",
+  "head": "b0e28a260c752e8060197b5f788086c53233cb4f",
   "analyses": [
     {
       "key": "",
@@ -586,6 +600,10 @@ universes:
 
 ## The status report
 
+A status report says how the results of an analysis stand: one status for each result of the
+resolved analysis, with the records and bytes that are in the working tree. It holds none of
+the analysis itself. Each status is under its result's id, and `resolve` gives the result.
+
 A result is `unchanged` where it has a record at each of its places and nothing it is made from
 has changed since the commit the record names; `stale` where something has; and `missing` where
 a place has no record that is the result's own. Separately, its bytes are `present` where those
@@ -594,7 +612,9 @@ at its place hash to its record's, and `absent` otherwise.
 ```mermaid
 classDiagram
   direction LR
-  class StatusReport
+  class StatusReport {
+    head : str [0..1]
+  }
   class Status {
     state : unchanged, stale or missing
     bytes : present or absent [0..1]
@@ -606,12 +626,12 @@ classDiagram
     state : unchanged, stale or missing
   }
   class ProvenanceRecord
-  class ResolvedAnalysis
+  class Result
   class Diagnostic
   class Insight
-  StatusReport *-- "1" ResolvedAnalysis : analysis
   StatusReport *-- "*" Status : statuses, by result id
   StatusReport *-- "*" EvidenceStatus : evidence
+  StatusReport o-- "*" Result : statuses, by id
   Status *-- "0..1" ProvenanceRecord : record
   Status *-- "*" Diagnostic : why
   EvidenceStatus *-- "*" Diagnostic : why
@@ -622,13 +642,13 @@ classDiagram
 
 | Field | Type | Meaning |
 |---|---|---|
-| `analysis` | [`ResolvedAnalysis`](#resolvedanalysis) | The analysis as it resolved |
-| `statuses` | map of `str` to [`Status`](#status) | Each planned result's status, by the result's id |
+| `head` | `str`, optional | The commit the repository was on when it was read, as [`ResolvedAnalysis`](#resolvedanalysis) gives it |
+| `statuses` | map of `str` to [`Status`](#status) | Each result's status, by the result's id, in the results' order |
 | `evidence` | list of [`EvidenceStatus`](#evidencestatus) | The status of each evidence that cites an output |
 
 ### `Status`
 
-A planned result's status: the worst of its places'.
+A result's status: the worst of its places'.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -657,11 +677,11 @@ cites, and `missing` where it cites none.
 
 ### Example
 
-For the analysis above, before anything is built, `status` gives the resolved analysis as its
-`analysis`, and beside it:
+For the analysis above, before anything is built, `status` gives:
 
 ```json
 {
+  "head": "b0e28a260c752e8060197b5f788086c53233cb4f",
   "statuses": {
     "fit#baseline": {
       "state": "missing",

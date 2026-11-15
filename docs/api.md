@@ -66,8 +66,8 @@ def resolve(path=None, *, offline=False) -> ResolvedAnalysis
 ```
 
 The analysis, resolved: every analysis of its stack with what it declares, each universe's
-selection, and the planned results, each with its places, what it reads and its command as it
-runs. Every rule of the specification is already applied, so a reader follows ids and applies
+selection, and its results, each with its places, what it reads and its command as it runs. It
+also gives `head`, the commit the repository is on. Every rule of the specification is already applied, so a reader follows ids and applies
 none itself.
 
 Raises [`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`: only a valid
@@ -82,29 +82,43 @@ for result in analysis.results:
 ## `status`
 
 ```python
-def status(path=None, *, at=None, offline=False) -> StatusReport
+def status(path=None, *, offline=False) -> StatusReport
 ```
 
-How the analysis's results stand: the analysis as it resolved, each planned result's
-[`Status`](data-model.md#status), and the status of each evidence that cites an output. One
-call tells a runner both what the results are and how each stands.
+How the analysis's results stand: for each result that `resolve` gives, its
+[`Status`](data-model.md#status), under the result's id; and the status of each evidence that
+cites an output. The records and bytes are the ones in the working tree.
 
 A result's status says whether its record still holds: whether anything the result is made
 from has changed since the commit the record names. This is what the specification calls
 checking, and its [check rules](https://astra-spec.org/0.1/specification/#rules) are the ones
 a status reports.
 
-With `at`, a revision of the repository that holds the analysis (a commit, a branch, a tag),
-the analysis is read as it is at that commit, with its records and bytes read there.
-
-Raises [`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`, and
-[`RequestError`](#errors) where `at` names no commit.
+The report holds none of the analysis: `resolve` gives that. Raises
+[`InvalidAnalysisError`](#errors) where the analysis breaks a `MUST`.
 
 ```python
 report = api.status("my-analysis")
 for id, status in report.statuses.items():
     print(id, status.state, status.bytes, [broken.code for broken in status.why])
 ```
+
+### Asking for both
+
+A runner needs both what the results are and how each stands, so it calls `resolve` and
+`status`. Each reads the working tree, and each gives `head`, the commit the repository was on.
+Where the two differ, something was committed between the calls, and the runner asks again:
+
+```python
+analysis = api.resolve(folder)
+report = api.status(folder)
+if report.head != analysis.head:
+    raise RuntimeError("the repository moved between the two readings: ask again")
+```
+
+`head` names the commit, not the files. A runner builds only from a committed tree, so for it
+the same `head` is the same files. Where the working tree has uncommitted changes, two readings
+at the same `head` can still differ.
 
 ## `init_analysis`
 
@@ -216,15 +230,14 @@ Raises [`PaperError`](#errors) where the PDF's text can't be read.
 |---|---|
 | `NoAnalysisError` | A folder holds no `astra.yaml` |
 | `InvalidAnalysisError` | The analysis breaks a `MUST`, so it has no resolved analysis and no statuses. Its `report` attribute is the [`ValidationReport`](data-model.md#validationreport) |
-| `RequestError` | What is asked for isn't there: a revision that names no commit. It is a `ValueError` |
 | `GitError` | git can't be run |
 | `CacheError` | The cache can't be used where the environment puts it |
 | `PaperError` | A paper can't be put in the cache, or its PDF's text can't be read |
 
 ## A runner, in brief
 
-This is the least a runner does with the API: ask once, build what isn't `unchanged` in the
-order the results come in, and record each. It leaves out what the specification's runner rules
+This is the least a runner does with the API: ask for the analysis and for the status of its
+results, build what isn't `unchanged` in the order the results come in, and record each. It leaves out what the specification's runner rules
 ask for, such as building only from a committed tree.
 
 ```python
@@ -246,14 +259,13 @@ def now() -> str:
 
 
 folder = Path(".")
+analysis = api.resolve(folder)
 report = api.status(folder)
-analysis = report.analysis
+if analysis.head is None or report.head != analysis.head:
+    raise SystemExit("the repository has no commit, or moved between the two readings")
 analyses = {each.key: each for each in analysis.analyses}
 inputs = {each.ref: each for one in analysis.analyses for each in one.inputs}
 results = {each.id: each for each in analysis.results}
-commit = subprocess.run(
-    ["git", "rev-parse", "HEAD"], cwd=folder, capture_output=True, text=True, check=True
-).stdout.strip()
 
 for result in analysis.results:  # each comes after every result it reads
     if report.statuses[result.id].state == "unchanged" or result.command is None:
@@ -271,7 +283,7 @@ for result in analysis.results:  # each comes after every result it reads
     started = now()
     subprocess.run(result.command, shell=True, cwd=folder / owner.folder, check=True)
     generation = api.Generation(
-        commit=commit,
+        commit=analysis.head,
         environment=api.Environment("urn:example:python-3.13"),
         runner=api.Runner("example-runner", "0.1.0"),
         inputs=tuple(read),
@@ -287,5 +299,5 @@ After it, `astra status` reads the record back:
 $ astra status
 fit#baseline  unchanged  present  .astra/records/baseline/fit.json
   made in urn:example:python-3.13 by example-runner 0.1.0
-1 planned result(s), 1 unchanged, 0 stale, 0 missing; 0 absent
+1 result(s), 1 unchanged, 0 stale, 0 missing; 0 absent
 ```
