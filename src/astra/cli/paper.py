@@ -6,8 +6,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from astra.model.paper import QuoteStatus
+    from astra.model.resolved_analysis import FragmentSelector, TextQuoteSelector
 
 
 @click.group("paper")
@@ -292,238 +297,99 @@ def paper_fetch_metadata(doi: str | None, version: int | None, fetch_all: bool) 
 @click.argument("doi")
 @click.option("--version", "-v", type=int, help="Paper version (for arXiv papers)")
 def paper_verify_quotes(doi: str, version: int | None) -> None:
-    """Verify multiple quotes from a cached paper in a single operation.
+    """Verify several quotes from a cached paper in one go.
 
-    Reads quote list from stdin as JSON. Extracts PDF text once and
-    verifies all quotes against it.
+    Reads a JSON list from stdin, an item for each quote: the `quote` of an evidence item and,
+    where it has one, its `location`, as astra.yaml writes them.
 
-    Input format (stdin):
-        {"quotes": [{"text": "...", "page": N, "prefix": "...", "suffix": "..."}, ...]}
+    \b
+        [{"quote": {"exact": "...", "prefix": "...", "suffix": "..."},
+          "location": {"value": "page=6"}}]
 
-    Output format (stdout, JSON):
-        {"doi": "...", "results": [...], "summary": {...}}
+    Prints a JSON list of each quote's status, in the same order, as `astra.api.verify_quote`
+    gives it: its `state` (found, elsewhere, not_found or no_paper) and, where the quote is in
+    the paper, the `page` it is on.
 
+    \b
     Exit codes:
-      0 - All quotes verified
-      1 - Some quotes not found
-      2 - Error (paper not cached, invalid input, etc.)
+      0 - Every quote is found
+      1 - One isn't found, or isn't on the page its location gives, or the paper isn't cached
+      2 - The input isn't such a list, or the paper's text can't be read
     """
-    from astra._internal.papers.cache import PaperCache
-    from astra._internal.papers.pdf import extract_text_from_pdf
-    from astra._internal.papers.quotes import VerificationStatus, verify_quote_in_pdf
+    from astra import api
+    from astra.cli import FAILED, fail, write_json
+    from astra.model import to_json
 
-    # Read JSON input from stdin
     try:
-        input_data = sys.stdin.read()
-        if not input_data.strip():
-            print(
-                json.dumps(
-                    {
-                        "doi": doi,
-                        "version": version,
-                        "results": [],
-                        "summary": {"total": 0, "verified": 0, "not_found": 0, "errors": 1},
-                        "error": "No input provided on stdin",
-                    }
-                )
+        quotes = [
+            (
+                api.TextQuoteSelector(**item["quote"]),
+                api.FragmentSelector(**item["location"]) if "location" in item else None,
             )
-            raise SystemExit(2)
-
-        data = json.loads(input_data)
-        quotes = data.get("quotes", [])
-    except json.JSONDecodeError as e:
-        print(
-            json.dumps(
-                {
-                    "doi": doi,
-                    "version": version,
-                    "results": [],
-                    "summary": {"total": 0, "verified": 0, "not_found": 0, "errors": 1},
-                    "error": f"Invalid JSON input: {e}",
-                }
-            )
-        )
-        raise SystemExit(2)
-
-    # Get paper from cache
-    cache = PaperCache()
-    cached_paper = cache.get(doi, version)
-
-    if not cached_paper:
-        print(
-            json.dumps(
-                {
-                    "doi": doi,
-                    "version": version,
-                    "results": [],
-                    "summary": {"total": len(quotes), "verified": 0, "not_found": 0, "errors": 1},
-                    "error": f"Paper not in cache: {doi}",
-                }
-            )
-        )
-        raise SystemExit(2)
-
-    # Extract text from PDF (ONCE)
-    try:
-        pdf = extract_text_from_pdf(cached_paper.pdf_path)
-    except Exception as e:
-        print(
-            json.dumps(
-                {
-                    "doi": doi,
-                    "version": version,
-                    "results": [],
-                    "summary": {"total": len(quotes), "verified": 0, "not_found": 0, "errors": 1},
-                    "error": f"Failed to extract text from PDF: {e}",
-                }
-            )
-        )
-        raise SystemExit(2)
-
-    # Verify each quote
-    results = []
-    verified_count = 0
-    not_found_count = 0
-
-    for idx, quote_data in enumerate(quotes):
-        quote_text = quote_data.get("text", "")
-        page_hint = quote_data.get("page")
-        prefix = quote_data.get("prefix")
-        suffix = quote_data.get("suffix")
-
-        if not quote_text:
-            results.append(
-                {
-                    "index": idx,
-                    "text": "",
-                    "status": "error",
-                    "found_pages": [],
-                    "message": "Empty quote text",
-                }
-            )
-            continue
-
-        status, found_pages, message = verify_quote_in_pdf(
-            quote_text, pdf, page_hint, prefix, suffix
-        )
-
-        display_text = quote_text[:50] + "..." if len(quote_text) > 50 else quote_text
-
-        results.append(
-            {
-                "index": idx,
-                "text": display_text,
-                "status": status.value,
-                "found_pages": found_pages,
-                "message": message,
-            }
-        )
-
-        if status == VerificationStatus.VERIFIED:
-            verified_count += 1
-        else:
-            not_found_count += 1
-
-    # Output results
-    output = {
-        "doi": doi,
-        "version": version,
-        "results": results,
-        "summary": {
-            "total": len(quotes),
-            "verified": verified_count,
-            "not_found": not_found_count,
-            "errors": 0,
-        },
-    }
-    print(json.dumps(output))
-
-    if not_found_count > 0:
-        raise SystemExit(1)
-    raise SystemExit(0)
+            for item in json.loads(sys.stdin.read())
+        ]
+    except (ValueError, TypeError, KeyError) as error:
+        fail(f"the input isn't a JSON list of quotes, each with a `quote`: {error}")
+    statuses = tuple(_status(doi, quote, version, location) for quote, location in quotes)
+    write_json(to_json(statuses))
+    if any(status.state != "found" for status in statuses):
+        raise click.exceptions.Exit(FAILED)
 
 
 @command.command("verify-quote")
 @click.argument("doi")
 @click.option("--quote", "-q", required=True, help="Exact quote text to verify")
 @click.option("--version", "-v", type=int, help="Paper version (for arXiv papers)")
-@click.option("--page", "-p", type=int, help="Expected page number (1-indexed)")
-@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--page", "-p", type=int, help="The page the quote is on, counted from 1")
+@click.option("--json", "as_json", is_flag=True, help="Print the status as JSON.")
 def paper_verify_quote(
-    doi: str, quote: str, version: int | None, page: int | None, output_json: bool
+    doi: str, quote: str, version: int | None, page: int | None, as_json: bool
 ) -> None:
     """Verify a quote exists in a cached paper.
 
-    Searches for the exact quote in the paper's text. Uses fuzzy matching
-    to handle minor OCR/extraction differences.
+    Seeks the quote in the paper's text, allowing for what extracting a PDF's text changes.
+    With --page, the quote is to be on that page. With --json, the status is printed as
+    `astra.api.verify_quote` gives it: its `state` (found, elsewhere, not_found or no_paper)
+    and, where the quote is in the paper, the `page` it is on.
 
+    \b
     Exit codes:
-      0 - Quote verified (found in paper)
-      1 - Quote not found
-      2 - Error (paper not cached, etc.)
+      0 - The quote is found
+      1 - It isn't found, or isn't on --page, or the paper isn't cached
+      2 - The paper's text can't be read
     """
-    from astra.cli.text import console as _console
+    from astra import api
+    from astra.cli import FAILED, write_json
+    from astra.model import to_json
 
-    console = _console()
-    from astra._internal.papers.cache import PaperCache
-    from astra._internal.papers.pdf import extract_text_from_pdf
-    from astra._internal.papers.quotes import VerificationStatus, verify_quote_in_pdf
-
-    cache = PaperCache()
-    cached_paper = cache.get(doi, version)
-
-    if not cached_paper:
-        if output_json:
-            print(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "message": f"Paper not in cache: {doi}",
-                        "found_pages": [],
-                        "expected_page": page,
-                    }
-                )
-            )
-        else:
-            console.print(f"[red]Error:[/red] Paper not in cache: {doi}")
-            console.print("Use [cyan]astra paper add[/cyan] first.")
-        raise SystemExit(2)
-
-    try:
-        pdf = extract_text_from_pdf(cached_paper.pdf_path)
-    except Exception as e:
-        if output_json:
-            print(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "message": f"Failed to extract text from PDF: {e}",
-                        "found_pages": [],
-                        "expected_page": page,
-                    }
-                )
-            )
-        else:
-            console.print(f"[red]Error:[/red] Failed to extract text from PDF: {e}")
-        raise SystemExit(2)
-
-    status, found_pages, message = verify_quote_in_pdf(quote, pdf, page)
-
-    if output_json:
-        print(
-            json.dumps(
-                {
-                    "status": status.value,
-                    "found_pages": found_pages,
-                    "expected_page": page,
-                    "message": message,
-                }
-            )
-        )
+    location = None if page is None else api.FragmentSelector(f"page={page}")
+    status = _status(doi, api.TextQuoteSelector(quote), version, location)
+    if as_json:
+        write_json(to_json(status))
     else:
-        if status == VerificationStatus.VERIFIED:
-            console.print(f"[green]✓ Verified[/green] {message}")
-        else:
-            console.print(f"[red]✗ Not found[/red] {message}")
+        from astra.cli.text import console
 
-    raise SystemExit(0 if status == VerificationStatus.VERIFIED else 1)
+        shown = {
+            "found": f"[green]✓ Found[/green] on page {status.page}",
+            "elsewhere": f"[red]✗ Not on page {page}[/red]: the quote is on page {status.page}",
+            "not_found": "[red]✗ Not found[/red] in the paper",
+            "no_paper": f"[red]✗ No paper[/red]: run [cyan]astra paper add {doi}[/cyan] first",
+        }
+        console().print(shown[status.state])
+    if status.state != "found":
+        raise click.exceptions.Exit(FAILED)
+
+
+def _status(
+    doi: str, quote: TextQuoteSelector, version: int | None, location: FragmentSelector | None
+) -> QuoteStatus:
+    """The status of `quote` in the cached paper of `doi`; stops with exit 2 where the paper's
+    text can't be read or the cache can't be used."""
+    from astra import api
+    from astra.cli import environment, fail
+
+    with environment():
+        try:
+            return api.verify_quote(doi, quote, version=version, location=location)
+        except api.PaperError as error:
+            fail(str(error))

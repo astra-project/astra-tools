@@ -84,38 +84,46 @@ outputs:
 """
 
 
+VALID = ROOT.replace("  missing: {path: nothere}\n", "").replace(", subanalysis.decision1: a", "")
+"""`ROOT` without what makes it invalid: a declaration that reaches nothing, and a selection for
+a decision no result of the universe uses."""
+
+
 def test_info_shows_the_analysis_in_brief(tmp_path: Path) -> None:
-    """The root's label and counts, then its inputs, outputs, decisions (those of the analyses
-    it declares after its own) and universes; a switch with the decision it switches on and its
-    cases (Elements *switch*). It checks nothing, so a declaration that reaches nothing is
-    counted, not reported."""
+    """The driving analysis's label and counts, then its inputs, outputs, decisions and
+    universes, each universe with what it selects; then each analysis it declares. A switch is
+    no output of the resolved analysis, so none is shown; it shows in what is planned, as
+    `output1` is built only where the switch takes it."""
     files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
     top = repository(tmp_path, files)
     switch = "  switch1:\n    switch: decision1\n    cases: {a: output1, b: input1}\nuniverses:\n"
-    repository(top, {"astra.yaml": ROOT.replace("universes:\n", switch, 1)})
+    repository(top, {"astra.yaml": VALID.replace("universes:\n", switch, 1)})
     result = astra("info", "-f", str(top / "astra.yaml"))
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
     assert lines[:2] == ["Example analysis", "Spec version: 0.1.0"]
-    assert "Inputs: 1 | Outputs: 2 | Decisions: 1 | Universes: 2" in lines
-    assert "Layout: 2 sub-analyses in ./nothere/, ./subanalysis/" in lines
+    assert "Inputs: 1 | Outputs: 1 | Decisions: 1 | Universes: 2" in lines
+    assert "Layout: 1 sub-analysis in subanalysis/" in lines
+    assert "Planned results: 1" in lines
     shown = " ".join(result.stdout.split())
     for part in ("Inputs:", "Outputs:", "Decisions:", "Universes:"):
         assert f"\n{part}\n" in result.stdout
     assert "input1 │ data/input1.csv" in shown
-    assert "switch1 │ switch │ on decision1 (a: output1, b: input1)" in shown
+    assert "output1 │ metric │ json" in shown and "switch1" not in shown
     assert "decision1:" in shown and "Analysis: subanalysis" in shown
-    assert "u2: derived from u1" in shown
+    # The effective selection: `u2` is derived from `u1`, and selects `b` itself.
+    assert "  u1: decisions.decision1 = a" in lines
+    assert "  u2: decisions.decision1 = b" in lines
 
 
-def test_info_shows_each_other_analysis_of_the_stack_after_the_root(tmp_path: Path) -> None:
-    """Each analysis the root declares, directly or not, by the address that reaches it and
-    its file, one at a commit with the commit; one that isn't a valid document says so."""
+def test_info_shows_each_other_analysis_of_the_stack_after_the_driving_one(tmp_path: Path) -> None:
+    """Each analysis the driving one declares, directly or not, by its key and its file, one
+    at a commit with the commit."""
     files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
     top = repository(tmp_path, files)
     first = git(top, "rev-parse", "HEAD").strip()
     declared = f"  previous: {{path: ., commit: '{first}'}}\ninputs:\n"
-    repository(top, {"astra.yaml": ROOT.replace("inputs:\n", declared, 1)})
+    repository(top, {"astra.yaml": VALID.replace("inputs:\n", declared, 1)})
     result = astra("info", "-f", str(top / "astra.yaml"), "-o")
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
@@ -125,17 +133,21 @@ def test_info_shows_each_other_analysis_of_the_stack_after_the_root(tmp_path: Pa
     assert lines.index("Example analysis") < lines.index(
         "Analysis: subanalysis  subanalysis/astra.yaml"
     )
-    (top / "subanalysis" / "astra.yaml").write_text(SUBANALYSIS + "name: x\n")
-    broken = astra("info", "-f", str(top / "astra.yaml")).stdout
-    assert "not a valid document: `astra validate` says why" in broken
 
 
-def test_info_with_no_stack_to_show_exits_1(tmp_path: Path, outside: Path) -> None:
-    """A root whose file isn't a valid document, or in no repository, has no stack."""
-    for folder in (analysis(git_init(tmp_path / "repo"), MINIMAL + "name: x\n"), analysis(outside)):
+def test_info_of_an_analysis_that_breaks_a_must_shows_why_and_exits_1(
+    tmp_path: Path, outside: Path
+) -> None:
+    """Only a valid analysis resolves, as text or as JSON: the errors are shown as
+    `astra validate` shows them."""
+    files = {"astra.yaml": VALID, "subanalysis/astra.yaml": SUBANALYSIS + "name: x\n"}
+    declaring = repository(tmp_path / "declaring", {**files, "data/input1.csv": "1\n"})
+    invalid = analysis(git_init(tmp_path / "repo"), MINIMAL + "name: x\n")
+    for folder in (declaring, invalid, analysis(outside)):
         result = astra("info", "--file", str(folder / "astra.yaml"))
         assert result.exit_code == 1
-        assert "astra validate" in result.stderr
+        assert result.stdout == astra("validate", str(folder)).stdout
+        assert "error" in result.stdout
 
 
 def test_info_exits_1_where_there_is_no_analysis(
@@ -161,7 +173,7 @@ def test_info_reads_the_astra_yaml_here_or_above(
 def test_info_shows_only_the_parts_asked_for(tmp_path: Path) -> None:
     files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
     top = repository(tmp_path, files)
-    repository(top, {"astra.yaml": ROOT})
+    repository(top, {"astra.yaml": VALID})
     shown = astra("info", "-f", str(top / "astra.yaml"), "-d", "-i").stdout
     parts = [part for part in ("Inputs:", "Outputs:", "Decisions:", "Universes:")]
     assert [part for part in parts if f"\n{part}\n" in shown] == ["Inputs:", "Decisions:"]
@@ -172,10 +184,7 @@ def test_info_json_is_the_analysis_as_it_resolves(tmp_path: Path) -> None:
     that breaks a MUST gets the validator's report, and exit 1."""
     files = {"astra.yaml": MINIMAL, "subanalysis/astra.yaml": SUBANALYSIS, "data/input1.csv": "1\n"}
     top = repository(tmp_path, files)
-    valid = ROOT.replace("  missing: {path: nothere}\n", "").replace(
-        ", subanalysis.decision1: a", ""
-    )
-    repository(top, {"astra.yaml": valid})
+    repository(top, {"astra.yaml": VALID})
     result = astra("info", "-f", str(top / "astra.yaml"), "--json")
     assert result.exit_code == 0
     document = json.loads(result.stdout)
@@ -188,7 +197,6 @@ def test_info_json_is_the_analysis_as_it_resolves(tmp_path: Path) -> None:
     result = astra("info", "-f", str(top / "astra.yaml"), "--json")
     assert result.exit_code == 1
     assert json.loads(result.stdout) == api.validate(top).to_json()
-    assert astra("info", "-f", str(top / "astra.yaml")).exit_code == 0
 
 
 # --- init ---
