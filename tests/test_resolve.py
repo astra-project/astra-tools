@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import pickle
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -972,6 +973,30 @@ def test_only_a_result_built_from_the_working_tree_alone_has_a_command(tmp_path:
     assert each_after_what_it_reads(analysis)
 
 
+def test_a_recipe_that_runs_on_a_commits_files_has_no_command_wherever_files_are_put(
+    tmp_path: Path,
+) -> None:
+    """Given where a runner puts the files it gives a recipe from another commit, `result`,
+    which reads two results from a commit, has a command naming each where the runner puts it,
+    under `<commits>/<commit id>/` at its path in that commit's tree. What runs on `lib`'s files
+    at that commit, and what is `lib`'s there, still has none."""
+    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
+    commit = git(top, "rev-parse", "HEAD").strip()
+    repository(top, {"astra.yaml": FROM_COMMIT % commit})
+    analysis = api.resolve(top, commits=".lightcone/commits")
+    at = f".lightcone/commits/{commit}"
+    assert {result.id: result.command for result in analysis.results} == {
+        "lib.out#u1": None,
+        "lib:out#v1": None,
+        "lib:once": None,
+        "result#u1": (
+            f"python make.py results/u1/lib.out.json {at}/lib/results/v1/out.json "
+            f"{at}/lib/results/once.json 'results/u1/result.csv'"
+        ),
+        "alone": "python make.py 'results/alone.json'",
+    }
+
+
 TABLES = """\
 spec_version: "0.1.0"
 inputs:
@@ -1217,6 +1242,47 @@ outputs:
         %s
 """
 """An analysis with one output, whose command is the one a test gives it."""
+
+
+def test_given_where_a_runner_puts_a_commits_files_a_result_that_reads_one_has_a_command(
+    tmp_path: Path,
+) -> None:
+    """The analysis is in `sub`, below its repository's top, and reads `lib`, beside it, at a
+    commit. Given `commits`, a folder from the analysis's own, a result that reads `lib`'s input
+    or its result has a command, naming each file at `<commits>/<commit id>/` and its path in
+    that commit's tree, from the top of its repository, as the recipe runs in `sub`. `lib`'s
+    result is still a result from a commit, which is never built, and has none."""
+    files = {
+        "lib/astra.yaml": TABLES,
+        "lib/data/table.csv": "1\n",
+        "sub/astra.yaml": MINIMAL,
+        "sub/data/own.csv": "2\n",
+    }
+    top = repository(tmp_path, files)
+    commit = git(top, "rev-parse", "HEAD").strip()
+    repository(top, {"sub/astra.yaml": READS_TABLES % commit})
+    analysis = api.resolve(top / "sub", commits=".lightcone/commits")
+    at = f".lightcone/commits/{commit}"
+    assert {result.id: result.command for result in analysis.results} == {
+        "reads_input": f"python make.py {at}/lib/data/table.csv data/own.csv "
+        "'results/reads_input.json'",
+        "lib:once": None,
+        "reads_result": f"python make.py {at}/lib/results/once.json 'results/reads_result.json'",
+        "alone": "python make.py data/own.csv 'results/alone.json'",
+    }
+    assert api.resolve(top / "sub").results == tuple(
+        replace(result, command=None) if result.id.startswith("reads_") else result
+        for result in analysis.results
+    )
+
+
+@pytest.mark.parametrize("commits", ["", ".", "..", "../commits", "a/../..", "/abs/commits"])
+def test_where_a_commits_files_go_is_a_folder_inside_the_analysiss(
+    tmp_path: Path, commits: str
+) -> None:
+    top = repository(tmp_path, {"astra.yaml": MINIMAL})
+    with pytest.raises(ValueError, match="folder inside the analysis's"):
+        api.resolve(top, commits=commits)
 
 
 @pytest.mark.parametrize(

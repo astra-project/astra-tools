@@ -579,7 +579,8 @@ that nothing reads, is named in the notes.
 
 A result has no `command` where it isn't built from the working tree alone: a result of an
 analysis read at a commit, one whose recipe runs on a commit's files, or one that reads a file
-at a commit.
+at a commit, unless [`resolve`](api.md#files-from-another-commit) was given the folder a runner
+puts such files in.
 
 A result with a `commit` is a result from a commit: it is never built, its record is the one
 at that commit, and `write_records` refuses it.

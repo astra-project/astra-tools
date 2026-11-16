@@ -260,7 +260,8 @@ class Result:
     command: str | None = None  # its recipe's command as it runs, in the folder of its output's
     # analysis, with each path relative to that folder. None for a result that isn't built from
     # the working tree alone: a result from a commit, one whose recipe runs on a commit's files,
-    # or one that reads a file at a commit, which has no place in the working tree
+    # or one that reads a file at a commit, which has no place in the working tree, unless
+    # `resolve` was given the folder a runner puts such files in (`commits`)
     commit: Commit | None = None  # the commit whose tree its places are in, where the analysis
     # it belongs to is read at one: a result from a commit, which is never built, and whose
     # record is the one at that commit. None for a result whose places are in the working tree

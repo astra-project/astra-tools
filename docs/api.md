@@ -62,7 +62,7 @@ for diagnostic in report.diagnostics:
 ## `resolve`
 
 ```python
-def resolve(path=None, *, offline=False) -> ResolvedAnalysis
+def resolve(path=None, *, offline=False, commits=None) -> ResolvedAnalysis
 ```
 
 The analysis, resolved: every analysis of its stack with what it declares, each universe's
@@ -78,6 +78,24 @@ analysis = api.resolve("my-analysis")
 for result in analysis.results:
     print(result.id, result.places[0].file_path, result.command)
 ```
+
+### Files from another commit
+
+A file of an analysis read at a commit has no place in the working tree, so a result that reads
+one, an input's file or a result from a commit's bytes, has no command. A runner that gives its
+recipe such files says where it puts them with `commits`: a folder, from the analysis's folder,
+under which each is at `<commits>/<commit id>/<its path in that commit's tree>`, the path a
+[`Place`](data-model.md#place) or an [`Input`](data-model.md#input) of that commit gives. Such a
+result then has a command, in which the placeholder for the file gives that path:
+
+```python
+analysis = api.resolve("my-analysis", commits=".runner/commits")
+```
+
+Putting the files there, the right bytes at the right path, is the runner's. A result whose
+recipe runs on a commit's files, or which is itself a result from a commit, still has no
+command. Raises `ValueError` where `commits` isn't a relative path that stays inside the
+analysis's folder.
 
 ## `status`
 
