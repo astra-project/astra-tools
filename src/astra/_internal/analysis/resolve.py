@@ -75,25 +75,31 @@ class Resolved:
     planned: Mapping[str, Planned]  # behind each result, by id, in the results' order
 
 
-def read(path: str | os.PathLike[str] | None, remotes: Remotes) -> Resolved:
+def read(
+    path: str | os.PathLike[str] | None, remotes: Remotes, *, commits: str | None = None
+) -> Resolved:
     """The analysis whose folder is `path`, the current folder by default, resolved: read in the
-    working tree of the git repository that holds it. Raises NoAnalysisError where there is no
-    analysis, InvalidAnalysisError where the analysis breaks a `MUST`, GitError where git can't
-    be run, CacheError where the cache can't be used, and OSError where a file can't be read."""
+    working tree of the git repository that holds it, with `commits` as `resolve` takes it.
+    Raises NoAnalysisError where there is no analysis, InvalidAnalysisError where the analysis
+    breaks a `MUST`, GitError where git can't be run, CacheError where the cache can't be used,
+    and OSError where a file can't be read."""
     report, context = validated(*worktree(path), remotes)
     if not report.valid:
         raise InvalidAnalysisError(report)
     assert context is not None  # a valid analysis has a stack
-    return resolve(context)
+    return resolve(context, commits=commits)
 
 
-def resolve(context: Context) -> Resolved:
-    """The stack of `context`, a valid one, resolved."""
+def resolve(context: Context, *, commits: str | None = None) -> Resolved:
+    """The stack of `context`, a valid one, resolved. `commits`, a folder from the root's folder,
+    is where a runner puts the files it gives a recipe from another commit, each at
+    `<commits>/<commit id>/<its path in that commit's tree>`: given it, a result that reads such
+    a file has a command, in which its placeholder gives that path."""
     stack = context.stack
     keys = _keys(stack)
     ordered = _ordered(context)
     ids = {at: _id(stack, keys, planned) for at, planned in ordered.items()}
-    builder = _Builder(context, keys, ids)
+    builder = _Builder(context, keys, ids, commits)
     repo = stack.analyses[stack.root].reader.repo
     assert repo is not None  # NOT_IN_REPOSITORY
     analysis = ResolvedAnalysis(
@@ -198,12 +204,17 @@ class _Builder:
     its analyses and results."""
 
     def __init__(
-        self, context: Context, keys: Mapping[Identity, str], ids: Mapping[At, str]
+        self,
+        context: Context,
+        keys: Mapping[Identity, str],
+        ids: Mapping[At, str],
+        commits: str | None,
     ) -> None:
         self.context = context
         self.stack = context.stack
         self.keys = keys
         self.ids = ids
+        self.commits = commits
         self.artifacts = {
             (entry.file, entry.pointer): entry
             for entry in self.stack.resolutions
@@ -412,8 +423,9 @@ class _Builder:
         return tuple(found)
 
     def result(self, planned: Planned) -> Result:
-        """A planned result, with what each entry of its output's `inputs` reads and, where it
-        is built from files read as the root is and no other, its command as it runs."""
+        """A planned result, with what each entry of its output's `inputs` reads and, where its
+        recipe runs on files read as the root is, its command as it runs: where it reads a file
+        at another commit too, only given the folder a runner puts such files in."""
         stack, output = self.stack, planned.output
         folder = output.analysis.folder or "."  # where its recipe runs: its output's analysis's
         own = places(stack, planned)
@@ -430,7 +442,11 @@ class _Builder:
                 sources.append(Source(entry.written, result=self.ids[at]))
                 read = self.context.building.planned[at]
                 path, read_at = places(stack, read)[0].bytes, read.owner.commit
-            here.add(read_at)
+            if read_at not in (None, stack.root.commit) and self.commits is not None:
+                # Where the runner puts it: in the root's tree, as the recipe runs there.
+                path = posixpath.join(stack.root.folder, self.commits, read_at, path)
+            else:
+                here.add(read_at)
             given[entry.written] = posixpath.relpath(path, folder)
         command = None
         if here == {stack.root.commit}:

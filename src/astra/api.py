@@ -33,6 +33,7 @@ from astra._internal.documents import scaffold as _scaffold
 from astra._internal.papers import library as _library
 from astra._internal.results.records import write_records
 from astra._internal.results.status import status as _status
+from astra._internal.sources import paths as _paths
 from astra._internal.sources.reader import worktree as _worktree
 from astra._internal.sources.remote import Remotes as _Remotes
 from astra.errors import (
@@ -141,13 +142,27 @@ def validate(
 
 
 def resolve(
-    path: str | os.PathLike[str] | None = None, *, offline: bool = False
+    path: str | os.PathLike[str] | None = None,
+    *,
+    offline: bool = False,
+    commits: str | None = None,
 ) -> ResolvedAnalysis:
     """The analysis whose folder is `path`, read as `validate` reads it, resolved
-    (`astra.model.resolved_analysis`), with `head`, the commit its repository is on. Raises
-    InvalidAnalysisError where the analysis breaks a `MUST`, and otherwise as `validate`
+    (`astra.model.resolved_analysis`), with `head`, the commit its repository is on.
+
+    `commits` is for a runner that gives a recipe files from another commit: a folder, from the
+    analysis's folder, under which it puts each such file at `<commits>/<commit id>/<its path
+    in that commit's tree>`. Given it, a result that reads a file at a commit, an input's or a
+    result from a commit's bytes, has a command, in which its placeholder gives that path.
+
+    Raises InvalidAnalysisError where the analysis breaks a `MUST`, ValueError where `commits`
+    isn't a relative path that stays inside the analysis's folder, and otherwise as `validate`
     does."""
-    return _read(path, _Remotes(offline=offline)).analysis
+    if commits is not None and (commits.startswith("/") or _paths.join("", commits) in (None, "")):
+        raise ValueError(
+            f"commits is {commits!r}: give a folder inside the analysis's, as a relative path"
+        )
+    return _read(path, _Remotes(offline=offline), commits=commits).analysis
 
 
 def status(path: str | os.PathLike[str] | None = None, *, offline: bool = False) -> StatusReport:
