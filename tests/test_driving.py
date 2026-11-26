@@ -23,7 +23,7 @@ from astra._internal.analysis.universes import Chain, built, imports, pins
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import WorktreeReader
-from tests.conftest import repository
+from tests.conftest import git, repository
 from tests.spec import SPEC
 
 OUTPUT = """\
@@ -206,6 +206,37 @@ def test_each_chain_a_key_goes_through_is_driven_on_its_own(kept: Path) -> None:
         ("lib",),
         ("lib", "deep"),
     }
+
+
+def test_driving_extends_through_no_declaration_with_a_commit(tmp_path: Path) -> None:
+    """`lib`, with no decisions, is driven where the root declares it by `path` alone, and so is
+    its `deep`, none of whose decisions the root's universes use; declared with a `commit`, by
+    `path` or by `url` (the root's own top at that commit), an analysis is only read, so neither
+    it nor what it declares is driven or built in the root's universes."""
+    files = {"astra.yaml": 'spec_version: "0.1.0"\n', "lib/astra.yaml": LIB}
+    top = repository(tmp_path, {**files, "lib/deep/astra.yaml": INNER})
+    first = git(top, "rev-parse", "HEAD").strip()
+    root = (
+        'spec_version: "0.1.0"\n'
+        "analyses:\n"
+        "  here: {path: lib}\n"
+        f"  old: {{path: lib, commit: '{first}'}}\n"
+        f"  remote: {{url: '{top.as_uri()}', commit: '{first}'}}\n"
+        "decisions:\n"
+        "  decision1:\n"
+        "    options: {a: {}, b: {}}\n"
+        + (OUTPUT % "result").replace("    recipe:", "    decisions: [decision1]\n    recipe:")
+        + "universes:\n"
+        "  u1:\n"
+        "    decisions: {decision1: a}\n"
+    )
+    stack = bound(repository(top, {"astra.yaml": root}))
+    assert chains(stack) == {("here",), ("here", "deep")}
+    assert list(built(driven(stack)[ROOT_ID], ROOT_ID)) == [
+        ROOT_ID,
+        Identity("lib"),
+        Identity("lib/deep"),
+    ]
 
 
 def test_a_driven_analysis_drives_through_its_own_parent(kept: Path) -> None:

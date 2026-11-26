@@ -229,9 +229,9 @@ def driven(
       effective selection or, for a universe with none, counts in its place: so the keys that
       drive are those of the universes' own `decisions`;
     - and a driven chain, the empty one of the analysis's own file included, followed by a
-      declaration, leading back to no analysis already on it, of an analysis with no decisions,
-      or none that a universe of the driving analysis uses (`used`) or may use (`maybe`, where
-      that is undetermined: see `unsettled`).
+      declaration with no `commit`, leading back to no analysis already on it, of an analysis
+      with no decisions, or none that a universe of the driving analysis uses (`used`) or may
+      use (`maybe`, where that is undetermined: see `unsettled`).
 
     An undetermined analysis's declarations aren't known, so none are driven.
     """
@@ -265,7 +265,10 @@ def _chains(stack: Stack, driver: Identity, counted: frozenset[Element]) -> dict
 
 def _extending(stack: Stack, driver: Identity, chain: Chain) -> Iterable[Declaration]:
     """The declarations that may extend `chain`: those of the analysis it ends at that reach an
-    analysis, and lead back to none already on it."""
+    analysis, with no `commit`, and lead back to none already on it. So only a key drives through
+    a declaration with a `commit`, a `url` one included: in astra-spec 0.1.0rc2, such a
+    declaration's analysis is only read, never driven (Elements *drives*), and such a key breaks
+    a rule of its own."""
     folder = chain[-1].reached if chain else driver
     if folder is None or (chain and chain[-1].outcome != "reached"):
         return ()
@@ -273,7 +276,9 @@ def _extending(stack: Stack, driver: Identity, chain: Chain) -> Iterable[Declara
     return [
         declaration
         for declaration in stack.analyses[folder].declarations.values()
-        if declaration.outcome == "reached" and declaration.reached not in on_chain
+        if declaration.outcome == "reached"
+        and declaration.declared.commit is None
+        and declaration.reached not in on_chain
     ]
 
 
@@ -289,9 +294,9 @@ def _uses_any(stack: Stack, declaration: Declaration, decisions: frozenset[Eleme
 
 def unsettled(stack: Stack, used: Used, maybe: Used) -> Mapping[Identity, frozenset[Chain]]:
     """For each analysis driving, the chains whose driving is undetermined: a driven chain
-    followed by a declaration, leading back to nothing on it, of an analysis that no key drives,
-    none of whose decisions a universe of the driving analysis uses, and one of whose decisions
-    one may use. They aren't driven (`driven`)."""
+    followed by a declaration with no `commit`, leading back to nothing on it, of an analysis
+    that no key drives, none of whose decisions a universe of the driving analysis uses, and one
+    of whose decisions one may use. They aren't driven (`driven`)."""
     chains = driven(stack, used, maybe)
     found: dict[Identity, frozenset[Chain]] = {}
     for member, _ in stack.determined():
