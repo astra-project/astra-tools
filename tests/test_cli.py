@@ -102,9 +102,10 @@ def test_validate_takes_an_astra_yaml_or_its_folder(tmp_path: Path) -> None:
 def test_validate_with_no_file_validates_every_root_analysis_here(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each astra.yaml under the current folder that no other declares, hidden, vendored and
-    results folders skipped; one declared is validated with the analysis that declares it."""
-    top = git_init(tmp_path)
+    """Each astra.yaml under the current folder that no other declares, the top's first, hidden,
+    vendored and results folders skipped; one declared is validated with the analysis that
+    declares it."""
+    top = analysis(git_init(tmp_path), 'spec_version: "0.1.0"\n')
     declaring = MINIMAL + "analyses:\n  part: {path: part}\n"
     analysis(top / "one", declaring)
     analysis(top / "one" / "part")
@@ -117,7 +118,7 @@ def test_validate_with_no_file_validates_every_root_analysis_here(
     assert "one/astra.yaml: valid" in result.stdout
     assert "two/astra.yaml: invalid" in result.stdout
     assert "part/astra.yaml:" not in result.stdout
-    assert result.stdout.splitlines()[-1] == "1/2 file(s) failed validation: two/astra.yaml"
+    assert result.stdout.splitlines()[-1] == "1/3 file(s) failed validation: two/astra.yaml"
     monkeypatch.chdir(top / "one")
     result = astra("validate", "--json")
     assert result.exit_code == 0
@@ -127,6 +128,7 @@ def test_validate_with_no_file_validates_every_root_analysis_here(
     result = astra("validate", "--json")
     assert result.exit_code == 1
     assert [(r["root"], r["valid"]) for r in json.loads(result.stdout)] == [
+        ("astra.yaml", True),
         ("one/astra.yaml", True),
         ("two/astra.yaml", False),
     ]

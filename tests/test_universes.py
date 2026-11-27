@@ -1,6 +1,7 @@
 """Universes: effective selections, and `UNKNOWN_DERIVED_FROM`, `DERIVED_FROM_CYCLE`,
 `MISSING_REQUIRED_OPTION`, `INCOMPATIBLE_OPTIONS` and `EXCLUDED_OPTION_SELECTED`, and what is
-still checked for a universe with no effective selection.
+still checked for a universe with no effective selection; and `UNIVERSES_IN_PART`, on small
+stacks of their own.
 
 The stacks share the root's two decisions and `subanalysis`, which the root's universes drive.
 The keeping one has `u1`, `u2` and `u3`; the breaking one, a universe for each way to break a
@@ -22,7 +23,7 @@ from astra._internal.analysis.universes import Selection, selections, written
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import WorktreeReader
-from tests.conftest import repository
+from tests.conftest import git, repository
 from tests.spec import SPEC
 
 SUBANALYSIS = """\
@@ -351,3 +352,214 @@ def test_the_iris_examples_constraints(tmp_path: Path) -> None:
     assert [r.pointer for r in incompatible.related] == [
         "/decisions/scaling/options/minmax/incompatible_with/0"
     ]
+
+
+# --- A part's universes: UNIVERSES_IN_PART ---
+
+
+DECIDING = """\
+spec_version: "0.1.0"
+decisions:
+  d:
+    options: {a: {}, b: {}}
+outputs:
+  out:
+    type: metric
+    format: json
+    decisions: [d]
+    recipe:
+      command: python make.py '{decisions.d}' '{output}'
+universes:
+  v1:
+    decisions: {d: a}
+"""
+"""An analysis with a universe `v1` of its own, which uses the decision it sets."""
+
+PLAIN = 'spec_version: "0.1.0"\n'
+"""An analysis with nothing in it."""
+
+
+def declaring(analyses: str, text: str = DECIDING) -> str:
+    """`text`, which declares `analyses` (a flow map)."""
+    return text.replace('spec_version: "0.1.0"\n', f'spec_version: "0.1.0"\nanalyses: {analyses}\n')
+
+
+def parts(report: api.ValidationReport) -> list[tuple[str, str, str | None, str | None]]:
+    """Each UNIVERSES_IN_PART, as its file, its pointer, its key and its commit."""
+    return [
+        (d.location.file, d.location.pointer, d.location.key, d.location.commit)
+        for d in report.diagnostics
+        if d.code == "UNIVERSES_IN_PART"
+    ]
+
+
+def head(top: Path) -> str:
+    return git(top, "rev-parse", "HEAD").strip()
+
+
+@pytest.mark.parametrize(
+    ("files", "where", "through", "folder"),
+    [
+        (  # upward: case 130
+            {"astra.yaml": declaring("{child: {path: child}}", PLAIN)}
+            | {"child/astra.yaml": declaring("{parent: {path: ..}}")},
+            "child",
+            "parent",
+            ".",
+        ),
+        (  # sideways
+            {"astra.yaml": declaring("{first: {path: first}, second: {path: second}}", PLAIN)}
+            | {"first/astra.yaml": PLAIN, "second/astra.yaml": declaring("{x: {path: ../first}}")},
+            "second",
+            "x",
+            "first",
+        ),
+        (  # deep, through what it declares by `path`: case 131
+            {"astra.yaml": declaring("{stage: {path: stage}}", PLAIN), "data/astra.yaml": PLAIN}
+            | {"stage/astra.yaml": declaring("{inner: {path: inner}}")}
+            | {"stage/inner/astra.yaml": declaring("{data: {path: ../../data}}", PLAIN)},
+            "stage",
+            "inner.data",
+            "data",
+        ),
+        (  # past an undetermined analysis on the way, which has no declarations to walk
+            {"astra.yaml": declaring("{stage: {path: stage}}", PLAIN), "data/astra.yaml": PLAIN}
+            | {"stage/astra.yaml": declaring("{bad: {path: bad}, other: {path: other}}")}
+            | {"stage/bad/astra.yaml": PLAIN + "name: x\n"}
+            | {"stage/other/astra.yaml": declaring("{data: {path: ../../data}}", PLAIN)},
+            "stage",
+            "other.data",
+            "data",
+        ),
+    ],
+    ids=["upward", "sideways", "deep", "past-undetermined"],
+)
+def test_a_part_with_a_universe_breaks_universes_in_part(
+    tmp_path: Path, files: dict[str, str], where: str, through: str, folder: str
+) -> None:
+    """A declaration by `path` that names a folder outside the analysis's own, in its file or in
+    one it reaches through declarations by `path`, makes it a part: each of its universes is
+    reported at its key in `universes`, with the declaration that reaches out as a related
+    place, and the message names the chain to it and the folder, from the top."""
+    report = api.validate(repository(tmp_path, files))
+    assert parts(report) == [(f"{where}/astra.yaml", "/universes", "v1", None)]
+    (diagnostic,) = [d for d in report.diagnostics if d.code == "UNIVERSES_IN_PART"]
+    assert diagnostic.level == "error"
+    assert (
+        f"`v1` is a universe of a part: through `{through}`, this analysis reaches the folder "
+        f"`{folder}`, outside its own" in diagnostic.message
+    )
+    assert "move `v1` to that analysis, or keep only imports here" in diagnostic.message
+    last = through.split(".")[-1]
+    (related,) = diagnostic.related
+    assert (related.pointer, related.commit) == (f"/analyses/{last}/path", None)
+
+
+def test_a_part_validated_as_the_root_breaks_universes_in_part(tmp_path: Path) -> None:
+    """A part is one whichever analysis is validated: as the root, it reaches outside its folder
+    as it does when declared."""
+    files = {"astra.yaml": PLAIN, "child/astra.yaml": declaring("{parent: {path: ..}}")}
+    report = api.validate(repository(tmp_path, files) / "child")
+    assert parts(report) == [("child/astra.yaml", "/universes", "v1", None)]
+
+
+def test_a_declaration_above_the_top_makes_a_part(tmp_path: Path) -> None:
+    """At the top of its repository, `{path: ..}` breaks DECLARATION_OUTSIDE_REPOSITORY, and the
+    analysis reaches above the top, so it is a part too."""
+    report = api.validate(repository(tmp_path, {"astra.yaml": declaring("{up: {path: ..}}")}))
+    codes = sorted(d.code for d in report.diagnostics)
+    assert codes == ["DECLARATION_OUTSIDE_REPOSITORY", "UNIVERSES_IN_PART"]
+    (diagnostic,) = [d for d in report.diagnostics if d.code == "UNIVERSES_IN_PART"]
+    assert "through `up`, this analysis reaches above the top of its repository" in (
+        diagnostic.message
+    )
+    assert "declare that analysis by `url` and `commit` instead" in diagnostic.message
+
+
+def test_a_declaration_at_a_commit_makes_a_part(tmp_path: Path) -> None:
+    """With or without a `commit`: `{path: ../data, commit}` names a folder outside, case 132;
+    and `{path: ., commit}` reaches the analysis's own folder at a commit where it declared
+    `..`, which the walk follows into that commit."""
+    files = {"astra.yaml": PLAIN, "data/astra.yaml": PLAIN}
+    top = repository(tmp_path, files | {"study/astra.yaml": declaring("{up: {path: ..}}", PLAIN)})
+    first = head(top)
+    analyses = f"{{data: {{path: ../data, commit: '{first}'}}}}"
+    repository(top, {"study/astra.yaml": declaring(analyses)})
+    assert parts(api.validate(top / "study")) == [("study/astra.yaml", "/universes", "v1", None)]
+    analyses = f"{{previous: {{path: ., commit: '{first}'}}}}"
+    repository(top, {"study/astra.yaml": declaring(analyses)})
+    report = api.validate(top / "study")
+    assert parts(report) == [("study/astra.yaml", "/universes", "v1", None)]
+    (diagnostic,) = [d for d in report.diagnostics if d.code == "UNIVERSES_IN_PART"]
+    assert "through `previous.up`, this analysis reaches the folder `.`" in diagnostic.message
+    (related,) = diagnostic.related
+    assert (related.file, related.pointer, related.commit) == (
+        "study/astra.yaml",
+        "/analyses/up/path",
+        first,
+    )
+
+
+def test_a_part_with_a_universe_at_a_commit_is_an_invalid_declared_analysis(
+    tmp_path: Path,
+) -> None:
+    """Analyses from a commit are judged by the rule too: the part's universe is reported in its
+    file at that commit, and the declaration of it breaks DECLARED_ANALYSIS_INVALID."""
+    files = {"astra.yaml": PLAIN, "data/astra.yaml": PLAIN}
+    top = repository(tmp_path, files | {"study/astra.yaml": declaring("{data: {path: ../data}}")})
+    first = head(top)
+    root = declaring(f"{{old: {{path: study, commit: '{first}'}}}}", PLAIN)
+    report = api.validate(repository(top, {"astra.yaml": root}))
+    assert parts(report) == [("study/astra.yaml", "/universes", "v1", first)]
+    assert [d.code for d in report.diagnostics if d.location.commit is None] == [
+        "DECLARED_ANALYSIS_INVALID"
+    ]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {  # a part whose `universes` hold only an import: case 134
+            "astra.yaml": declaring("{child: {path: child}}"),
+            "child/astra.yaml": declaring("{parent: {path: ..}}", PLAIN)
+            + "universes:\n  parent_v1: {analysis: parent, universe: v1}\n",
+        },
+        {  # the top keeps its universes, though what it declares reaches above itself
+            "astra.yaml": declaring("{stage: {path: stage}}"),
+            "stage/astra.yaml": declaring("{parent: {path: ..}}", PLAIN),
+        },
+        {  # an undetermined analysis on the way, with nothing else reaching out
+            "astra.yaml": declaring("{stage: {path: stage}}", PLAIN),
+            "stage/astra.yaml": declaring("{bad: {path: bad}}"),
+            "stage/bad/astra.yaml": PLAIN + "name: x\n",
+        },
+    ],
+    ids=["only-imports", "top", "undetermined"],
+)
+def test_a_self_contained_analysis_or_a_part_without_universes_keeps_it(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    """A part may hold imports, and an analysis that reaches outside its folder through nothing
+    it declares by `path` is self-contained, whatever an analysis it declares reaches."""
+    report = api.validate(repository(tmp_path, files))
+    assert parts(report) == []
+
+
+def test_a_remote_and_what_it_declares_make_no_part(tmp_path: Path) -> None:
+    """As in case 135, `sub` declares a remote, whose own `lib` is a folder of the remote's
+    tree, which the walk never meets, and a `child` that declares `sub` with `..`, inside `sub`'s
+    folder."""
+    remote = repository(tmp_path / "remote", {"astra.yaml": declaring("{lib: {path: lib}}", PLAIN)})
+    repository(remote, {"lib/astra.yaml": declaring("{parent: {path: ..}}", PLAIN)})
+    analyses = (
+        f"{{remote: {{url: '{remote.as_uri()}', commit: '{head(remote)}'}}, "
+        "child: {path: child}}"
+    )
+    files = {
+        "astra.yaml": declaring("{sub: {path: sub}}", PLAIN),
+        "sub/astra.yaml": declaring(analyses),
+        "sub/child/astra.yaml": declaring("{parent: {path: ..}}", PLAIN),
+    }
+    report = api.validate(repository(tmp_path / "root", files))
+    assert parts(report) == []
+    assert report.valid, [d.code for d in report.diagnostics]

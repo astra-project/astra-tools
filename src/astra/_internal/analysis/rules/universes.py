@@ -1,9 +1,16 @@
-"""Universes: a universe's `derived_from` names another of its analysis's universes
-(`UNKNOWN_DERIVED_FROM`) and its chain doesn't loop (`DERIVED_FROM_CYCLE`); its own `decisions`
-set only decisions it uses on some branch (`UNUSED_DECISION`), and should set only those it uses
-(`INACTIVE_DECISION`); its effective selection keeps every constraint of the options it selects,
-among the decisions in play (`MISSING_REQUIRED_OPTION`, `INCOMPATIBLE_OPTIONS`), and selects no
-excluded one (`EXCLUDED_OPTION_SELECTED`).
+"""Universes: a part's `universes` hold only imports (`UNIVERSES_IN_PART`); a universe's
+`derived_from` names another of its analysis's universes (`UNKNOWN_DERIVED_FROM`) and its chain
+doesn't loop (`DERIVED_FROM_CYCLE`); its own `decisions` set only decisions it uses on some
+branch (`UNUSED_DECISION`), and should set only those it uses (`INACTIVE_DECISION`); its
+effective selection keeps every constraint of the options it selects, among the decisions in
+play (`MISSING_REQUIRED_OPTION`, `INCOMPATIBLE_OPTIONS`), and selects no excluded one
+(`EXCLUDED_OPTION_SELECTED`).
+
+A part reaches a folder outside its own by `path`, above the top of its repository included,
+in its file or through what it declares by `path` (`universes.parts`). Each of its universes
+that isn't an import breaks the first rule, reported at that universe with the declaration that
+reaches out as a related place, whether the part is validated as the root, driven or not, or
+read at a commit.
 
 Every universe of every analysis of the stack is checked, on its
 effective selection (`universes.selections`), with its own analysis driving (Results *uses*,
@@ -42,6 +49,7 @@ from astra.model.diagnostic import Diagnostic, Location
 
 CODES = frozenset(
     {
+        "UNIVERSES_IN_PART",
         "UNKNOWN_DERIVED_FROM",
         "DERIVED_FROM_CYCLE",
         "UNUSED_DECISION",
@@ -57,6 +65,7 @@ Constraints = Mapping[tuple[str, Element, str], tuple[Resolution, ...]]
 
 
 def check(context: Context) -> Iterator[Diagnostic]:
+    yield from _in_part(context)
     for member, analysis in context.stack.determined():
         for id_, written in analysis.universes.items():
             if written.derived_from is not None:
@@ -73,6 +82,31 @@ def check(context: Context) -> Iterator[Diagnostic]:
             for entry in selection.entries:
                 if names_option(context.stack, entry):
                     yield from _selected(context, constraints, selection, entry, play, maybe)
+
+
+def _in_part(context: Context) -> Iterator[Diagnostic]:
+    """`UNIVERSES_IN_PART` at each universe of a part that isn't an import, with the
+    declaration that makes its analysis a part as a related place."""
+    for identity, chain in context.parts.items():
+        reaching = chain[-1]
+        through = ".".join(declaration.id for declaration in chain)
+        related = context.at(reaching.owner, ("analyses", reaching.id, "path"))
+        for universe in own_universes(context.stack, identity):
+            if reaching.folder is None:
+                message = (
+                    f"`{universe.id}` is a universe of a part: through `{through}`, this "
+                    "analysis reaches above the top of its repository: declare that analysis by "
+                    "`url` and `commit` instead, or keep only imports here"
+                )
+            else:
+                message = (
+                    f"`{universe.id}` is a universe of a part: through `{through}`, this "
+                    f"analysis reaches the folder `{reaching.folder or '.'}`, outside its own, so "
+                    f"an analysis above it sets its decisions: move `{universe.id}` to that "
+                    "analysis, or keep only imports here"
+                )
+            at = context.at(identity, ("universes",), universe.id)
+            yield context.diagnostic("UNIVERSES_IN_PART", message, at, [related])
 
 
 def _unused(context: Context) -> Iterator[Diagnostic]:

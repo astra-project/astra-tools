@@ -71,6 +71,7 @@ class Case:
 
 CASES: Mapping[str, Case] = {
     "NOT_IN_REPOSITORY": Case(OUTPUT, ""),
+    "MISSING_TOP_ANALYSIS": Case(OUTPUT, ""),
     "UNSUPPORTED_SPEC_VERSION": Case(OUTPUT, "/spec_version"),
     "UNRESOLVED_ADDRESS": Case(
         OUTPUT.replace("    recipe:", "    inputs: [nothing]\n    recipe:"),
@@ -120,6 +121,12 @@ outputs:
     "UNDECLARED_TEMPLATE_REF": Case(
         OUTPUT.replace("'{output}'", "'{inputs.input2}' '{output}'"),
         "/outputs/result/recipe/command",
+    ),
+    "UNIVERSES_IN_PART": Case(
+        "analyses: {up: {path: ..}}\n"
+        + DECISIONS
+        + "universes: {u1: {decisions: {decision1: a}}}\n",
+        "/universes",
     ),
     "UNKNOWN_DERIVED_FROM": Case(
         DECISIONS + "universes:\n  u1: {decisions: {decision1: a}}\n  u2: {derived_from: u9}\n",
@@ -209,6 +216,13 @@ universes: {u1: {label: Drives nothing}}
         + DECISIONS
         + "universes: {u1: {decisions: {again.decision1: a}}}\n",
         "/universes/u1/decisions",
+    ),
+    "KEY_THROUGH_COMMIT": Case(
+        "analyses: {old: {path: subanalysis, commit: '{first}'}}\n"
+        + OUTPUT
+        + "universes: {u1: {decisions: {old.decision1: a}}}\n",
+        "/universes/u1/decisions",
+        {"subanalysis/astra.yaml": SUBANALYSIS},
     ),
     "MISSING_DECISION": Case(
         DECISIONS.replace(
@@ -331,17 +345,19 @@ def text(root: str) -> str:
 
 @pytest.fixture(scope="module")
 def cases(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One repository with a folder per case, each named by its code in lower case:
+    """One repository with a folder per case, each named by its code in lower case, and an
+    `astra.yaml` at its top:
 
     - `UNSUPPORTED_SPEC_VERSION` states 0.2; `INPUT_NOT_TRACKED`'s input is written after the
       last commit; `MISSING_INPUT_FILE`'s isn't written;
     - `COMMIT_NOT_ANCESTOR` declares its folder at a commit of another branch;
     - `DECLARED_ANALYSIS_INVALID` declares its folder at the first commit, where its file
-      reads an address that names nothing.
+      reads an address that names nothing, and `KEY_THROUGH_COMMIT` its `subanalysis` there.
 
-    `NOT_IN_REPOSITORY` is copied out of the repository by its test."""
+    `NOT_IN_REPOSITORY` is copied out of the repository by its test, and `MISSING_TOP_ANALYSIS`
+    is in a repository of its own."""
     top = tmp_path_factory.mktemp("cases")
-    files: dict[str, str] = {}
+    files: dict[str, str] = {"astra.yaml": MINIMAL}
     for code, case in CASES.items():
         folder = code.lower()
         files[f"{folder}/astra.yaml"] = text(case.root)
@@ -361,6 +377,9 @@ def cases(tmp_path_factory: pytest.TempPathFactory) -> Path:
         ),
         "commit_not_ancestor/astra.yaml": text(
             CASES["COMMIT_NOT_ANCESTOR"].root.replace("{side}", side)
+        ),
+        "key_through_commit/astra.yaml": text(
+            CASES["KEY_THROUGH_COMMIT"].root.replace("{first}", first)
         ),
     }
     repository(top, later)
@@ -389,6 +408,8 @@ def test_the_validator_reports_each_code(
     if code == "NOT_IN_REPOSITORY":
         monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
         folder = Path(shutil.copytree(folder, tmp_path / "outside"))
+    if code == "MISSING_TOP_ANALYSIS":
+        folder = repository(tmp_path, {"analysis/astra.yaml": text(CASES[code].root)}) / "analysis"
     report = api.validate(folder, offline=True)
     reported = {
         (d.code, d.location.pointer) for d in report.diagnostics if d.location.commit is None

@@ -2,18 +2,11 @@ spec_version: "0.1.0"
 label: Driven analysis
 analyses:
   stage: {path: stage}
-inputs:
-  seed: {path: data/seed.txt}
 outputs:
-  shared:
-    type: data
-    format: txt
-    inputs: [seed]
-    recipe: {command: "cat {inputs.seed} > {output}"}
   comparison:
     type: report
     format: txt
-    inputs: [shared, stage.fit, stage.fit#local]
+    inputs: [stage.shared, stage.fit, stage.fit#local]
     recipe: {command: "cat {inputs} > {output}"}
 universes:
   baseline:

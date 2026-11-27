@@ -132,19 +132,23 @@ FROM_COMMIT = """\
 spec_version: "0.1.0"
 analyses:
   lib: {path: lib, commit: "%s"}
+decisions:
+  method:
+    options: {a: {}, b: {}}
 outputs:
   result:
     type: table
     format: csv
-    inputs: [lib.out, lib.out#v1, lib.once]
+    inputs: [lib.out#v1, lib.once]
+    decisions: [method]
     recipe:
-      command: python make.py {inputs} '{output}'
+      command: python make.py {inputs} '{decisions.method}' '{output}'
 universes:
   u1:
-    decisions: {lib.d: a}
+    decisions: {method: a}
 """
-"""A root whose universes drive `lib` at a commit, and which reads `lib`'s `out` as it builds
-it, pinned to `lib`'s own `v1`, and `lib`'s `once`, built once."""
+"""A root that reads `lib`, at a commit, only as `lib` builds it: its `out` pinned to `lib`'s own
+`v1`, and its `once`, built once."""
 
 
 def astra(*args: str) -> Result:
@@ -228,9 +232,9 @@ def test_astra_view_shows_what_an_entry_reads_through_a_switch(tmp_path: Path) -
 def test_astra_view_shows_no_command_for_what_isnt_built_from_the_working_tree_alone(
     tmp_path: Path,
 ) -> None:
-    """The root's universes drive `lib`, read at a commit, so `lib.out#u1` is the root's, but
-    its recipe runs on that commit's files; and `result#u1` reads `lib`'s own results, from
-    that commit, by the ids `lib:out#v1` and `lib:once`. Neither has a command to show."""
+    """`result#u1` reads `lib`'s own results, from the commit `lib` is read at, by the ids
+    `lib:out#v1` and `lib:once`, which a runner reads at that commit and doesn't build: it has
+    no command to show."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
     commit = git(top, "rev-parse", "HEAD").strip()
     repository(top, {"astra.yaml": FROM_COMMIT % commit})
@@ -238,10 +242,8 @@ def test_astra_view_shows_no_command_for_what_isnt_built_from_the_working_tree_a
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
         "universe u1",
-        "  lib.decisions.d = a",
-        "lib.out#u1  results/u1/lib.out.json",
+        "  decisions.method = a",
         "result#u1  results/u1/result.csv",
-        "  lib.out reads lib.out#u1",
         "  lib.out#v1 reads lib:out#v1",
         "  lib.once reads lib:once",
     ]

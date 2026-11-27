@@ -2,8 +2,8 @@
 `NOT_BUILT_IN_UNIVERSE` and `UNDRIVEN_DECLARATION` hold, each with its names.
 
 The stacks are `test_validate`'s worked example; an `output5` reading `subanalysis` in the
-root's `u1` and in `subanalysis`'s own `u1` and `v1`, where `v1` drives its parent through
-`parent: {path: ..}`; and `stage.lib.out#v1`, read through two declarations.
+root's `u1` and in `subanalysis`'s own `u1` and `v1`, where `v1` drives `inner`, an analysis in
+`subanalysis`'s folder; and `stage.lib.out#v1`, read through two declarations.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from tests.test_validate import WORKED_EXAMPLE
 SUBANALYSIS = """\
 spec_version: "0.1.0"
 analyses:
-  parent: {path: ..}
+  inner: {path: inner}
 inputs:
   input1: {path: data/input1.csv}
 decisions:
@@ -42,18 +42,37 @@ outputs:
   unread:
     type: metric
     format: json
-    decisions: [decision1, parent.decision1]
+    decisions: [decision1, inner.decision2]
     recipe:
       command: >-
-        python src/unread.py '{decisions.decision1}' '{decisions.parent.decision1}' '{output}'
+        python src/unread.py '{decisions.decision1}' '{decisions.inner.decision2}' '{output}'
 universes:
   u1:
-    decisions: {decision1: a, parent.decision1: b}
+    decisions: {decision1: a, inner.decision2: b}
   v1:
-    decisions: {decision1: b, parent.decision1: a}
+    decisions: {decision1: b, inner.decision2: a}
 """
-"""`subanalysis`, whose own universes drive its parent, and an output nothing reads, made with
-the parent's decision, which those universes then use (Results *uses*)."""
+"""`subanalysis`, self-contained, whose own universes drive `inner`, in its folder, and an
+output nothing reads, made with `inner`'s decision, which those universes then use (Results
+*uses*)."""
+
+INNER = """\
+spec_version: "0.1.0"
+inputs:
+  input2: {path: data/input2.csv}
+decisions:
+  decision2:
+    options: {a: {}, b: {}}
+outputs:
+  output2:
+    type: metric
+    format: json
+    inputs: [input2]
+    decisions: [decision2]
+    recipe:
+      command: python src/output2.py '{inputs.input2}' '{decisions.decision2}' '{output}'
+"""
+"""`subanalysis`'s `inner`, with no universes of its own."""
 
 ROOT = """\
 spec_version: "0.1.0"
@@ -81,7 +100,7 @@ outputs:
       - subanalysis.output1#u1               # the root's u1
       - subanalysis.output1#subanalysis_u1   # subanalysis's own u1, imported
       - subanalysis.output1#v1               # subanalysis's own v1
-      - output1#subanalysis_v1               # the root's output1, as subanalysis's v1 builds it
+      - subanalysis.inner.output2#subanalysis_v1  # inner's output2, as subanalysis's v1 builds it
     recipe:
       command: python make.py '{output}'
 universes:
@@ -98,7 +117,17 @@ findings:
 """
 """The root, with `output5`, and a finding citing `subanalysis.output1` without a pin."""
 
-ROOT_ID, SUB_ID = Identity(""), Identity("subanalysis")
+ROOT_ID, SUB_ID, INNER_ID = Identity(""), Identity("subanalysis"), Identity("subanalysis/inner")
+
+PINNING = {
+    "astra.yaml": ROOT,
+    "data/input1.csv": "1\n",
+    "subanalysis/astra.yaml": SUBANALYSIS,
+    "subanalysis/data/input1.csv": "2\n",
+    "subanalysis/inner/astra.yaml": INNER,
+    "subanalysis/inner/data/input2.csv": "3\n",
+}
+"""The files of the stack whose root is `ROOT`."""
 
 
 def building(top: Path) -> Building:
@@ -128,13 +157,7 @@ def worked(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def pinning(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    files = {
-        "astra.yaml": ROOT,
-        "data/input1.csv": "1\n",
-        "subanalysis/astra.yaml": SUBANALYSIS,
-        "subanalysis/data/input1.csv": "2\n",
-    }
-    return repository(tmp_path_factory.mktemp("pinning"), files)
+    return repository(tmp_path_factory.mktemp("pinning"), PINNING)
 
 
 def test_the_worked_example_plans_its_three_results(worked: Path) -> None:
@@ -159,13 +182,14 @@ def test_the_universes_built_are_the_roots_and_those_pins_name(pinning: Path) ->
     """The root's universes, and those a pin on an output built per universe names in a planned
     result's `inputs`: `subanalysis`'s own `u1`, through the import, and `v1`, with no entry
     `v1` in the root's file. In each, its own analysis is the driver, and is built with what its
-    universes drive: the root's drive `subanalysis`, and `subanalysis`'s `v1` drives its parent."""
+    universes drive: the root's drive `subanalysis`, and `inner` through it, whose decision they
+    don't use; `subanalysis`'s drive `inner`."""
     universes = building(pinning).universes
     assert {(str(u.analysis), u.id): list(built) for u, built in universes.items()} == {
-        (".", "u1"): [ROOT_ID, SUB_ID],
-        (".", "u2"): [ROOT_ID, SUB_ID],
-        ("subanalysis", "u1"): [SUB_ID, ROOT_ID],
-        ("subanalysis", "v1"): [SUB_ID, ROOT_ID],
+        (".", "u1"): [ROOT_ID, SUB_ID, INNER_ID],
+        (".", "u2"): [ROOT_ID, SUB_ID, INNER_ID],
+        ("subanalysis", "u1"): [SUB_ID, INNER_ID],
+        ("subanalysis", "v1"): [SUB_ID, INNER_ID],
     }
 
 
@@ -174,10 +198,10 @@ def test_each_planned_result_is_named_from_the_analysis_whose_universe_it_is_bui
 ) -> None:
     """The root's outputs, `output5` once; what the root builds of `subanalysis` in its
     universes is named `subanalysis.output1`; `output1` in `subanalysis`'s own `u1` and `v1` is
-    named from `subanalysis`; the root's `output1`, built in `v1` through the driven
-    `parent: {path: ..}`, is named `parent.output1` there, though the root's own file reads it
-    as `output1#subanalysis_v1`. The finding cites `subanalysis.output1` in each of the root's
-    universes; `unread`, which nothing reads or cites, isn't planned."""
+    named from `subanalysis`; `inner`'s `output2`, built in `v1` through the driven
+    `inner: {path: inner}`, is named `inner.output2` there, though the root's own file reads it
+    as `subanalysis.inner.output2#subanalysis_v1`. The finding cites `subanalysis.output1` in
+    each of the root's universes; `unread`, which nothing reads or cites, isn't planned."""
     assert planned(pinning) == {
         (".", "output1#u1"),
         (".", "output1#u2"),
@@ -186,32 +210,40 @@ def test_each_planned_result_is_named_from_the_analysis_whose_universe_it_is_bui
         (".", "subanalysis.output1#u2"),
         ("subanalysis", "output1#u1"),
         ("subanalysis", "output1#v1"),
-        ("subanalysis", "parent.output1#v1"),
+        ("subanalysis", "inner.output2#v1"),
     }
 
 
 def test_a_stack_read_in_its_own_universes_and_anothers_validates(pinning: Path) -> None:
-    """Every pin of `output5` reads a universe where the analysis it reads is built, and the
-    undriven `parent` adds no name in the root's universes."""
+    """Every pin of `output5` reads a universe where the analysis it reads is built, and
+    `inner`, which the root's universes drive by extension, adds no name in them."""
     assert api.validate(pinning).diagnostics == ()
 
 
 LIB = """\
 spec_version: "0.1.0"
 analyses:
-  parent: {path: ..}
+  tool: {path: tool}
 outputs:
   out:
     type: metric
     format: json
-    decisions: [parent.d]
+    decisions: [tool.e]
     recipe:
-      command: python make.py '{decisions.parent.d}' '{output}'
+      command: python make.py '{decisions.tool.e}' '{output}'
 universes:
   v1: {}
 """
-"""`stage`'s `lib`, with no decisions, whose `out` consumes `stage`'s `d`, and a `v1` of its own
-that drives nothing."""
+"""`stage`'s `lib`, with no decisions, whose `out` consumes its `tool`'s `e`, and a `v1` of its
+own that drives nothing."""
+
+TOOL = """\
+spec_version: "0.1.0"
+decisions:
+  e:
+    options: {a: {}, b: {}}
+"""
+"""`lib`'s `tool`: one decision, and nothing else."""
 
 STAGE = """\
 spec_version: "0.1.0"
@@ -224,14 +256,15 @@ outputs:
   stage_out:
     type: metric
     format: json
+    inputs: [lib.out]
     decisions: [d]
     recipe:
-      command: python make.py '{decisions.d}' '{output}'
+      command: python make.py '{inputs.lib.out}' '{decisions.d}' '{output}'
 universes:
   v1:
-    decisions: {d: a}
+    decisions: {d: a, lib.tool.e: b}
 """
-"""`stage`, whose universes drive `lib`, since it has no decisions."""
+"""`stage`, whose universes drive `lib` and its `tool`, as `stage_out` reads `lib.out`."""
 
 READING_LIB = """\
 spec_version: "0.1.0"
@@ -256,7 +289,12 @@ universes:
 
 @pytest.fixture(scope="module")
 def reading_lib(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    files = {"astra.yaml": READING_LIB, "stage/astra.yaml": STAGE, "stage/lib/astra.yaml": LIB}
+    files = {
+        "astra.yaml": READING_LIB,
+        "stage/astra.yaml": STAGE,
+        "stage/lib/astra.yaml": LIB,
+        "stage/lib/tool/astra.yaml": TOOL,
+    }
     return repository(tmp_path_factory.mktemp("reading_lib"), files)
 
 
@@ -282,9 +320,9 @@ def test_a_pin_to_another_analysiss_universe_is_held_by_not_built_in_universe_al
     """A pin that names another analysis's universe is not in the driver's file, so only
     NOT_BUILT_IN_UNIVERSE holds it. The root's universes drive nothing, yet its pins through
     `stage.lib` break no rule; `stage.stage_out#lib_v1` breaks NOT_BUILT_IN_UNIVERSE alone,
-    since `lib`'s `v1` doesn't build `stage`. In `lib`'s own `v1`, which doesn't drive
-    `parent`, `lib`'s `out` consumes `parent.d` where `stage` isn't built, in the file of the
-    analysis whose universe it is: both rules."""
+    since `lib`'s `v1` doesn't build `stage`. In `lib`'s own `v1`, which doesn't drive `tool`,
+    `lib`'s `out` consumes `tool.e` where `tool` isn't built, in the file of the analysis whose
+    universe it is: both rules."""
     report = api.validate(reading_lib)
     assert [(d.code, d.location.file, d.location.pointer) for d in report.diagnostics] == [
         ("NOT_BUILT_IN_UNIVERSE", "astra.yaml", "/outputs/compared/inputs/2"),

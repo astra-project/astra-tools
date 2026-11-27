@@ -40,8 +40,7 @@ from tests.conftest import (
     repository,
 )
 from tests.spec import DOCUMENTS
-from tests.test_planned import ROOT, SUBANALYSIS
-from tests.test_resolve import FROM_COMMIT as DRIVING
+from tests.test_planned import PINNING, SUBANALYSIS
 from tests.test_resolve import INNER, LIB, PAIR, STAGE
 from tests.test_validate import WORKED_EXAMPLE
 
@@ -657,13 +656,7 @@ def test_a_declared_analysiss_evidence_citing_a_planned_result_gets_a_status(
     `v1`, though `output5`'s pins plan them too. `unread`, which the root doesn't plan, gets no
     status. A missing one fails the check (`STALE_EVIDENCE`), located in the file that holds
     it."""
-    files = {
-        "astra.yaml": ROOT,
-        "data/input1.csv": "1\n",
-        "subanalysis/astra.yaml": CITING_SUBANALYSIS,
-        "subanalysis/data/input1.csv": "2\n",
-    }
-    top = repository(tmp_path, files)
+    top = repository(tmp_path, {**PINNING, "subanalysis/astra.yaml": CITING_SUBANALYSIS})
     build(top)
     cites = ("subanalysis.output1#u1", "subanalysis.output1#u2")
     report = api.status(top)
@@ -842,28 +835,6 @@ def test_results_of_an_analysis_from_another_repository_are_read_from_its_remote
     results = {result.id: result for result in resolved.results}
     assert owner(resolved, results["lib:out#v1"]).commit == api.Commit(holding, url)
     assert report.evidence[0].state == "unchanged"
-
-
-def test_what_a_driver_builds_of_an_analysis_from_a_commit_is_checked_as_its_own(
-    tmp_path: Path,
-) -> None:
-    """What the root's universes build of `lib` belongs to the root, and
-    its record names the root's commit, at which the root's file declares `lib` at its commit;
-    a universe that selects another option for `lib`'s decision makes it stale, and what reads
-    it."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    build(top, top / "lib")
-    holding = git(repository(top, {}), "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": DRIVING % holding})
-    build(top)
-    assert {s[0] for s in statuses(api.status(top)).values()} == {"unchanged"}
-    (top / "astra.yaml").write_text((DRIVING % holding).replace("lib.d: a", "lib.d: b"))
-    report = api.status(top)
-    assert statuses(report)["lib.out#u1"][0] == "stale"
-    assert errors(report.statuses["lib.out#u1"]) == ["STALE_RESULT"]
-    assert statuses(report)["lib:out#v1"][0] == "unchanged"
-    found = report.statuses["result#u1"]
-    assert (found.state, errors(found), found.stale_inputs) == ("stale", [], ("lib.out",))
 
 
 # --- An analysis that breaks a MUST has no statuses ---

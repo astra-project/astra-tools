@@ -3,13 +3,13 @@
   "contract_revision": "v1",
   "oracle": {
     "repository": "https://github.com/astra-project/astra-tools",
-    "commit": "4eb68bcd94992539009a140f4022619249171b52"
+    "commit": "0000000000000000000000000000000000000000"
   },
   "specification": {
     "repository": "https://github.com/astra-project/astra-spec",
-    "release": "0.1.0rc1",
-    "tag": "v0.1.0rc1",
-    "commit": "5861947f4023e10920368a565f25ff397f870498",
+    "release": "0.1.0rc2",
+    "tag": "v0.1.0rc2",
+    "commit": "0000000000000000000000000000000000000000",
     "document_version": "0.1.0"
   },
   "git_environment": {

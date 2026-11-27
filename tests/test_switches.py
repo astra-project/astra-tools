@@ -1599,6 +1599,9 @@ outputs:
   sw:
     switch: d
     cases: {a: one}
+universes:
+  v1:
+    decisions: {d: a}
 """
 
 FROM_COMMIT = """\
@@ -1609,14 +1612,12 @@ outputs:
   result:
     type: metric
     format: json
-    inputs: [lib.sw]
+    inputs: [lib.sw#v1]
     recipe:
-      command: python make.py '{inputs.lib.sw}' '{output}'
-universes:
-  u1:
-    decisions: {lib.d: a}
+      command: python make.py '{inputs.lib.sw#v1}' '{output}'
 """
-"""A root whose `u1` drives `lib`, declared at a commit, and reads its switch."""
+"""A root that reads the switch of `lib`, declared at a commit, pinned to `lib`'s own `v1`: an
+analysis from a commit is only read, never driven."""
 
 
 def test_a_switch_of_an_analysis_from_a_commit_takes_the_case_written_there(
@@ -1624,7 +1625,7 @@ def test_a_switch_of_an_analysis_from_a_commit_takes_the_case_written_there(
 ) -> None:
     """Results: a switch of an analysis declared with a `commit` is read with its files at its
     commit. There, `sw`'s case for `a` is `one`; in the working tree it has since become `two`.
-    `result` reads `lib.one` in `u1`."""
+    `result`, built once, reads `lib.one` in `lib`'s own `v1`."""
     top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
     commit = git(top, "rev-parse", "HEAD").strip()
     changed = LIB.replace("cases: {a: one}", "cases: {a: two}")
@@ -1633,13 +1634,13 @@ def test_a_switch_of_an_analysis_from_a_commit_takes_the_case_written_there(
     stack = bind(*worktree(top))[0]
     assert stack is not None
     lib = Identity("lib", commit)
-    (entry,) = [r for r in stack.resolutions if r.field == "inputs" and r.written == "lib.sw"]
+    (entry,) = [r for r in stack.resolutions if r.field == "inputs" and r.written == "lib.sw#v1"]
     assert entry.element == Element(lib, "switch", "sw")
-    u1 = Element(ROOT, "universe", "u1")
+    v1 = Element(lib, "universe", "v1")
     meaning = Context(stack, Catalogue.load()).meaning
-    taken = meaning.taken(entry.element, u1)
+    taken = meaning.taken(entry.element, v1)
     assert taken is not None and taken.case is not None
     assert (taken.option, taken.case.written) == ("a", "one")
-    through = meaning.through(entry, u1)
+    through = meaning.through(entry, None)
     assert through is not None
-    assert (through.target, through.universe) == (Element(lib, "output", "one"), u1)
+    assert (through.target, through.universe) == (Element(lib, "output", "one"), v1)

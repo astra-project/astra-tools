@@ -119,6 +119,12 @@ class Context:
         return universes.driven(self.stack, self._used, self._maybe)
 
     @cached_property
+    def parts(self) -> Mapping[Identity, Chain]:
+        """Each analysis that is a part, with the chain of declarations through which it reaches
+        a folder outside its own (Elements *part*)."""
+        return universes.parts(self.stack)
+
+    @cached_property
     def unsettled(self) -> Mapping[Identity, frozenset[Chain]]:
         """For each analysis driving, the chains whose driving is undetermined."""
         return universes.unsettled(self.stack, self._used, self._maybe)

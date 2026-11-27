@@ -3,8 +3,12 @@
 It binds the stack (`stack`): every `astra.yaml` of it, by the parse and schema rules and
 astra-tools' `UNSUPPORTED_SPEC_VERSION`. Then it runs the validator rules (`rules`) on the
 stack, or reports `NOT_IN_REPOSITORY` for a root in no repository, whose declarations aren't
-followed, whether or not its file is a valid document. The validator codes no check of this
-build reports are listed in the report as `unchecked`.
+followed. The two rules about the root's repository are checked here, whether or not its file
+is a valid document: `NOT_IN_REPOSITORY`, and `MISSING_TOP_ANALYSIS`, that the top of its
+repository, in the tree the root is read in, holds an `astra.yaml` file, which a symlink or a
+folder isn't. A root read at a commit, an analysis from a commit judged as its own root
+(`rules.commits`), is judged at that commit. The validator codes no check of this build reports
+are listed in the report as `unchecked`.
 """
 
 from __future__ import annotations
@@ -16,12 +20,12 @@ from astra._internal.analysis.rules.context import Context
 from astra._internal.analysis.stack import bind
 from astra._internal.documents import contract, load
 from astra._internal.documents.catalogue import Catalogue
-from astra._internal.sources.reader import Reader
+from astra._internal.sources.reader import CommitReader, Reader
 from astra._internal.sources.remote import Remotes
-from astra.model.diagnostic import Location
+from astra.model.diagnostic import Diagnostic, Location
 from astra.model.validation_report import ValidationReport
 
-CODES = frozenset({"NOT_IN_REPOSITORY"})
+CODES = frozenset({"NOT_IN_REPOSITORY", "MISSING_TOP_ANALYSIS"})
 """The validator codes checked here, beside those `load`, `contract` and the rules report."""
 
 
@@ -30,6 +34,31 @@ def _order(location: Location) -> tuple[bool, str, str, int, int]:
     commit = location.commit
     file, line, column = location.file, location.line or 0, location.column or 0
     return commit is not None, commit or "", file, line, column
+
+
+def _top(reader: Reader, root: str, catalogue: Catalogue) -> list[Diagnostic]:
+    """`MISSING_TOP_ANALYSIS`, in the file of the root, whose folder is `root`, where the top of
+    the tree `reader` reads holds no `astra.yaml` file. The message names that top as a path from
+    the root's folder."""
+    entry = reader.stat("astra.yaml")
+    if entry is not None and entry.kind == "file":
+        return []
+    top = posixpath.relpath(".", root or ".")
+    commit, url = (reader.commit, reader.url) if isinstance(reader, CommitReader) else (None, None)
+    if commit is None:
+        message = (
+            f"the top of this analysis's repository, `{top}` from its folder, holds no astra.yaml "
+            "file (a symlink or a folder isn't one): put one there; one with only a "
+            "`spec_version` will do"
+        )
+    else:
+        message = (
+            f"the top of this analysis's repository, `{top}` from its folder, held no astra.yaml "
+            f"file at `{commit}` (a symlink or a folder isn't one): declare a commit whose top "
+            "holds one"
+        )
+    location = Location(posixpath.join(root, "astra.yaml"), "", None, None, None, commit, url)
+    return [catalogue.diagnostic("MISSING_TOP_ANALYSIS", message, location)]
 
 
 def unchecked(catalogue: Catalogue) -> tuple[str, ...]:
@@ -65,9 +94,11 @@ def validated(
         )
         location = Location(file, "", None, None)
         found.append(catalogue.diagnostic("NOT_IN_REPOSITORY", message, location))
-    elif stack is not None:
-        context = Context(stack, catalogue)
-        found.extend(rules.check(context))
+    else:
+        found.extend(_top(reader, root, catalogue))
+        if stack is not None:
+            context = Context(stack, catalogue)
+            found.extend(rules.check(context))
     # A MUST broken in an analysis from a commit can be found both under this root and as that
     # analysis's own root (`rules.commits`): it is reported once.
     unique = dict.fromkeys(found)

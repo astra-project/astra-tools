@@ -1,6 +1,6 @@
 {
   "spec_version": "0.1.0",
-  "head": "4f9d748efd6d6620a78fb2006eedde5a06895fd3",
+  "head": "c8ef4a5f2abea6eb46ece53c1001d555dd8c3ca8",
   "analyses": [
     {
       "key": "",
@@ -10,28 +10,9 @@
       "declares": {
         "stage": "stage"
       },
-      "inputs": [
-        {
-          "ref": "inputs.seed",
-          "path": "data/seed.txt",
-          "tags": []
-        }
-      ],
+      "inputs": [],
       "decisions": [],
       "outputs": [
-        {
-          "ref": "outputs.shared",
-          "type": "data",
-          "format": "txt",
-          "tags": [],
-          "decisions": [],
-          "inputs": [
-            {
-              "entry": "seed",
-              "target": "inputs.seed"
-            }
-          ]
-        },
         {
           "ref": "outputs.comparison",
           "type": "report",
@@ -40,8 +21,8 @@
           "decisions": [],
           "inputs": [
             {
-              "entry": "shared",
-              "target": "outputs.shared"
+              "entry": "stage.shared",
+              "target": "stage.outputs.shared"
             },
             {
               "entry": "stage.fit",
@@ -123,10 +104,14 @@
       "key": "stage",
       "folder": "stage",
       "tags": [],
-      "declares": {
-        "parent": ""
-      },
-      "inputs": [],
+      "declares": {},
+      "inputs": [
+        {
+          "ref": "stage.inputs.seed",
+          "path": "stage/data/seed.txt",
+          "tags": []
+        }
+      ],
       "decisions": [
         {
           "ref": "stage.decisions.method",
@@ -147,6 +132,19 @@
       ],
       "outputs": [
         {
+          "ref": "stage.outputs.shared",
+          "type": "data",
+          "format": "txt",
+          "tags": [],
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "seed",
+              "target": "stage.inputs.seed"
+            }
+          ]
+        },
+        {
           "ref": "stage.outputs.fit",
           "type": "metric",
           "format": "json",
@@ -156,8 +154,8 @@
           ],
           "inputs": [
             {
-              "entry": "parent.shared",
-              "target": "outputs.shared"
+              "entry": "shared",
+              "target": "stage.outputs.shared"
             }
           ]
         }
@@ -178,19 +176,19 @@
   ],
   "results": [
     {
-      "id": "shared",
-      "output": "outputs.shared",
+      "id": "stage:shared",
+      "output": "stage.outputs.shared",
       "places": [
         {
           "address": "shared",
-          "record_path": ".astra/records/shared.json",
-          "file_path": "results/shared.txt"
+          "record_path": "stage/.astra/records/shared.json",
+          "file_path": "stage/results/shared.txt"
         }
       ],
       "inputs": [
         {
           "entry": "seed",
-          "input": "inputs.seed"
+          "input": "stage.inputs.seed"
         }
       ],
       "command": "cat data/seed.txt > results/shared.txt"
@@ -208,11 +206,11 @@
       "universe": "universes.baseline",
       "inputs": [
         {
-          "entry": "parent.shared",
-          "result": "shared"
+          "entry": "shared",
+          "result": "stage:shared"
         }
       ],
-      "command": "fit ../results/shared.txt a > ../results/baseline/stage.fit.json"
+      "command": "fit results/shared.txt a > ../results/baseline/stage.fit.json"
     },
     {
       "id": "stage:fit#local",
@@ -227,11 +225,11 @@
       "universe": "stage.universes.local",
       "inputs": [
         {
-          "entry": "parent.shared",
-          "result": "shared"
+          "entry": "shared",
+          "result": "stage:shared"
         }
       ],
-      "command": "fit ../results/shared.txt a > results/local/fit.json"
+      "command": "fit results/shared.txt a > results/local/fit.json"
     },
     {
       "id": "comparison#baseline",
@@ -246,8 +244,8 @@
       "universe": "universes.baseline",
       "inputs": [
         {
-          "entry": "shared",
-          "result": "shared"
+          "entry": "stage.shared",
+          "result": "stage:shared"
         },
         {
           "entry": "stage.fit",
@@ -258,7 +256,7 @@
           "result": "stage:fit#local"
         }
       ],
-      "command": "cat results/shared.txt results/baseline/stage.fit.json stage/results/local/fit.json > results/baseline/comparison.txt"
+      "command": "cat stage/results/shared.txt results/baseline/stage.fit.json stage/results/local/fit.json > results/baseline/comparison.txt"
     },
     {
       "id": "stage.fit#alternate",
@@ -273,11 +271,11 @@
       "universe": "universes.alternate",
       "inputs": [
         {
-          "entry": "parent.shared",
-          "result": "shared"
+          "entry": "shared",
+          "result": "stage:shared"
         }
       ],
-      "command": "fit ../results/shared.txt b > ../results/alternate/stage.fit.json"
+      "command": "fit results/shared.txt b > ../results/alternate/stage.fit.json"
     },
     {
       "id": "comparison#alternate",
@@ -292,8 +290,8 @@
       "universe": "universes.alternate",
       "inputs": [
         {
-          "entry": "shared",
-          "result": "shared"
+          "entry": "stage.shared",
+          "result": "stage:shared"
         },
         {
           "entry": "stage.fit",
@@ -304,7 +302,7 @@
           "result": "stage:fit#local"
         }
       ],
-      "command": "cat results/shared.txt results/alternate/stage.fit.json stage/results/local/fit.json > results/alternate/comparison.txt"
+      "command": "cat stage/results/shared.txt results/alternate/stage.fit.json stage/results/local/fit.json > results/alternate/comparison.txt"
     }
   ],
   "notes": [
@@ -315,8 +313,8 @@
       "location": {
         "file": "astra.yaml",
         "pointer": "/outputs/comparison/inputs/2",
-        "line": 16,
-        "column": 33
+        "line": 9,
+        "column": 39
       },
       "related": []
     },
@@ -327,7 +325,7 @@
       "location": {
         "file": "astra.yaml",
         "pointer": "/findings/fit/evidence/1/artifact",
-        "line": 29,
+        "line": 22,
         "column": 19
       },
       "related": []

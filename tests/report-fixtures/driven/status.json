@@ -1,7 +1,7 @@
 {
-  "head": "4f9d748efd6d6620a78fb2006eedde5a06895fd3",
+  "head": "c8ef4a5f2abea6eb46ece53c1001d555dd8c3ca8",
   "statuses": {
-    "shared": {
+    "stage:shared": {
       "state": "missing",
       "bytes": {
         "state": "absent"
@@ -10,9 +10,9 @@
         {
           "code": "MISSING_RECORD",
           "level": "error",
-          "message": "no record is at .astra/records/shared.json: build `shared`, and record it there",
+          "message": "no record is at stage/.astra/records/shared.json: build `shared`, and record it there",
           "location": {
-            "file": ".astra/records/shared.json",
+            "file": "stage/.astra/records/shared.json",
             "pointer": ""
           },
           "related": []
@@ -129,7 +129,7 @@
           "location": {
             "file": "astra.yaml",
             "pointer": "/findings/fit/evidence/0/artifact",
-            "line": 28,
+            "line": 21,
             "column": 19
           },
           "related": []
@@ -148,7 +148,7 @@
           "location": {
             "file": "astra.yaml",
             "pointer": "/findings/fit/evidence/1/artifact",
-            "line": 29,
+            "line": 22,
             "column": 19
           },
           "related": []
@@ -157,7 +157,7 @@
     }
   ],
   "inputs": {
-    "inputs.seed": {
+    "stage.inputs.seed": {
       "state": "present"
     }
   },

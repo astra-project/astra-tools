@@ -21,6 +21,8 @@ Pure functions of a Stack, each of which `rules.Context` computes once:
 - `driven` and `unsettled`: the chains of declarations each analysis's universes drive, given the
   decisions they use (Elements *drives*), and those whose driving is undetermined; `built`,
   the analyses built in its universes, whose decisions they set;
+- `parts`: the analyses that are parts, which reach a folder outside their own by `path`, and
+  the chain of declarations through which each does (Elements *part*);
 - `building`: of the root's run, the universes built, and the planned results whose analysis is
   built in their universe, each with its names (Results *name*); `places`, where each name of
   a planned result puts its record and its bytes (Results *place*, *default place*).
@@ -38,6 +40,7 @@ from types import MappingProxyType
 
 from astra._internal.analysis.stack import Declaration, Element, Identity, Kind, Resolution, Stack
 from astra._internal.documents import document
+from astra._internal.sources.paths import lies_inside
 
 Chain = tuple[Declaration, ...]
 """Declarations from one analysis's file, each in the file of the analysis the one before reaches:
@@ -312,6 +315,46 @@ def unsettled(stack: Stack, used: Used, maybe: Used) -> Mapping[Identity, frozen
             and _uses_any(stack, declaration, possible)
         )
     return MappingProxyType(found)
+
+
+def parts(stack: Stack) -> Mapping[Identity, Chain]:
+    """Each analysis of the stack that is a part, whose file is a valid document, with the chain
+    of declarations through which it reaches a folder outside its own: an analysis is a part
+    where a declaration by `path`, with or without a `commit`, names a folder outside its
+    folder, or above the top of its repository, in its own file or in that of an analysis it
+    reaches through declarations by `path`. The walk is breadth first, in file order, and goes
+    through no `url` declaration, so every folder it meets is one of the analysis's repository,
+    at one commit or another, from that repository's top; an undetermined analysis on the way
+    has no declarations to walk. Any other analysis is self-contained (Elements
+    *self-contained*, *part*)."""
+    found: dict[Identity, Chain] = {}
+    for member, _ in stack.determined():
+        reaching = _reaching(stack, member.identity)
+        if reaching is not None:
+            found[member.identity] = reaching
+    return MappingProxyType(found)
+
+
+def _reaching(stack: Stack, start: Identity) -> Chain | None:
+    """The chain to the first declaration, breadth first, that makes `start` a part (`parts`);
+    None where none does."""
+    seen = {start}
+    todo: list[Chain] = [()]
+    while todo:
+        chain = todo.pop(0)
+        at = chain[-1].reached if chain else start
+        assert at is not None  # only a declaration that reached an analysis is followed
+        for declaration in stack.analyses[at].declarations.values():
+            if declaration.declared.url is not None:
+                continue
+            folder = declaration.folder
+            if folder is None or not (folder == start.folder or lies_inside(folder, start.folder)):
+                return (*chain, declaration)
+            reached = declaration.reached
+            if reached is not None and reached not in seen:
+                seen.add(reached)
+                todo.append((*chain, declaration))
+    return None
 
 
 def built(chains: tuple[Chain, ...], driver: Identity) -> Mapping[Identity, tuple[Chain, ...]]:

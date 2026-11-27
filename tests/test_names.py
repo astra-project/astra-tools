@@ -308,19 +308,24 @@ def test_an_artifact_on_a_switch_whose_case_names_nothing_or_cycles_isnt_judged(
 
 
 @pytest.mark.parametrize(
-    ("analyses", "outcome"),
+    ("analyses", "codes"),
     [
-        ("{sub: {path: nothere}}", "MISSING_DECLARED_ANALYSIS"),
-        ("{sub: {path: ..}}", "DECLARATION_OUTSIDE_REPOSITORY"),
-        ("{sub: {path: bad}}", "UNKNOWN_FIELD"),
-        (f"{{sub: {{url: 'file:///nowhere/r.git', commit: '{'0' * 40}'}}}}", "REMOTE_UNREACHABLE"),
+        ("{sub: {path: nothere}}", ["MISSING_DECLARED_ANALYSIS"]),
+        ("{sub: {path: ..}}", ["DECLARATION_OUTSIDE_REPOSITORY", "UNIVERSES_IN_PART"]),
+        ("{sub: {path: bad}}", ["UNKNOWN_FIELD"]),
+        (
+            f"{{sub: {{url: 'file:///nowhere/r.git', commit: '{'0' * 40}'}}}}",
+            ["REMOTE_UNREACHABLE", "KEY_THROUGH_COMMIT"],
+        ),
     ],
 )
 def test_no_address_through_an_undetermined_analysis_is_checked(
-    tmp_path: Path, analyses: str, outcome: str | None
+    tmp_path: Path, analyses: str, codes: list[str]
 ) -> None:
-    """In the files that declare an undetermined analysis, no address through
-    that declaration is checked; the declaration's own code is reported."""
+    """In the files that declare an undetermined analysis, no address through that declaration
+    is checked; the declaration's own code is reported, and the rules on what kind of
+    declaration it is still apply: `..` above the top makes the root a part, whose `u1` breaks
+    UNIVERSES_IN_PART, and the key `sub.decision1` through a `url` breaks KEY_THROUGH_COMMIT."""
     text = (
         KEPT.replace(
             "analyses:\n  sub: {path: sub}\n  again: {path: ./sub/}\n  self: {path: .}\n",
@@ -336,4 +341,4 @@ def test_no_address_through_an_undetermined_analysis_is_checked(
     }
     report = api.validate(repository(tmp_path, files))
     assert unresolved(report) == []
-    assert [d.code for d in report.diagnostics] == ([outcome] if outcome else [])
+    assert [d.code for d in report.diagnostics] == codes
