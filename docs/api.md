@@ -92,10 +92,9 @@ result then has a command, in which the placeholder for the file gives that path
 analysis = api.resolve("my-analysis", commits=".runner/commits")
 ```
 
-Putting the files there, the right bytes at the right path, is the runner's. A result whose
-recipe runs on a commit's files, or which is itself a result from a commit, still has no
-command. Raises `ValueError` where `commits` isn't a relative path that stays inside the
-analysis's folder.
+Putting the files there, the right bytes at the right path, is the runner's. A result from a
+commit still has no command. Raises `ValueError` where `commits` isn't a relative path that
+stays inside the analysis's folder.
 
 ## `status`
 

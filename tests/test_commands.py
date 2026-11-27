@@ -255,11 +255,16 @@ def test_init_check_writes_nothing_and_json_reports(tmp_path: Path) -> None:
 
 def test_init_analysis_writes_an_empty_analysis_and_nothing_else(tmp_path: Path) -> None:
     """What `astra init` and downstream tools scaffold through: an astra.yaml, valid once its
-    folder is in a repository, with no universes folder."""
+    folder is in a repository whose top holds one, with no universes folder. Nothing is
+    written at the top: the next validation reports MISSING_TOP_ANALYSIS."""
     top = git_init(tmp_path)
     api.init_analysis(top / "stage")
     assert [path.name for path in (top / "stage").iterdir()] == ["astra.yaml"]
+    assert sorted(path.name for path in top.iterdir()) == [".git", "stage"]
     assert 'label: "stage"' in (top / "stage" / "astra.yaml").read_text()
+    codes = [d.code for d in api.validate(top / "stage").diagnostics]
+    assert codes == ["MISSING_TOP_ANALYSIS"]
+    api.init_analysis(top)
     assert api.validate(top / "stage").diagnostics == ()
 
 

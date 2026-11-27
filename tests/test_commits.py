@@ -228,13 +228,37 @@ def test_a_must_found_only_as_its_own_root_is_reported_at_its_place(tmp_path: Pa
     assert sorted(invalid.related, key=str) == sorted(inside, key=str)
 
 
-DRIVES_LIB = OWN_UNIVERSE.replace(
-    "    inputs: [lib.out]\n", "    decisions: [e]\n    inputs: [lib.out]\n"
-).replace("{e: a}", "{e: a, lib.d: a}")
-"""An analysis whose own `u1` drives `lib`, so that its `result`, built per universe, reads
-`lib.out` where `lib` is built: valid as its own root."""
+HIDING = """\
+spec_version: "0.1.0"
+analyses:
+  lib: {{path: lib, commit: '{first}'}}
+decisions:
+  d:
+    options: {{a: {{}}, b: {{}}}}
+outputs:
+  other:
+    type: metric
+    format: json
+    decisions: [d]
+    recipe:
+      command: python make.py '{{decisions.d}}' '{{output}}'
+  hidden:
+    type: metric
+    format: json
+    inputs: [lib.out]
+    recipe:
+      command: python make.py '{{inputs.lib.out}}' '{{output}}'
+  sw:
+    switch: d
+    cases: {{a: other, b: hidden}}
+universes:
+  v1:
+    decisions: {{d: a}}
+"""
+"""An analysis whose `hidden`, which only `sw`'s case for `b` names, reads `lib.out`, of a `lib`
+declared at a commit: its own `v1` takes `a`, so its own pass never reaches `hidden`."""
 
-DRIVING_REMOTE = """\
+PINNING_HIDDEN = """\
 spec_version: "0.1.0"
 analyses:
   remote: {{url: '{url}', commit: '{commit}'}}
@@ -242,37 +266,33 @@ outputs:
   result:
     type: metric
     format: json
-    inputs: [remote.result]
+    inputs: [remote.hidden#v1]
     recipe:
-      command: python make.py '{{inputs.remote.result}}' '{{output}}'
-universes:
-  u1:
-    decisions: {{remote.e: a}}
+      command: python make.py '{{inputs.remote.hidden#v1}}' '{{output}}'
 """
-"""A root whose `u1` drives `remote` by its `e`, but not `remote`'s `lib`."""
+"""A root that reads `remote`'s `hidden` pinned to `remote`'s own `v1`."""
 
 
 def test_a_must_found_only_under_this_root_has_the_declaration_as_a_related_place(
     tmp_path: Path,
 ) -> None:
-    """`remote` is valid as its own root, so it isn't DECLARED_ANALYSIS_INVALID;
-    under this root, whose `u1` drives it but not its `lib`, its `result` reads `lib.out` where
-    `lib` isn't built. That `MUST`, which only this root's pass finds in the commit's file, is
-    reported there under its own code, with the declaration that leads to it as a related
-    place."""
-    files = {"astra.yaml": DRIVES_LIB, "lib/astra.yaml": LIBRARY}
-    remote = repository(tmp_path / "remote", files)
-    head = git(remote, "rev-parse", "HEAD").strip()
+    """`remote` is valid as its own root, so it isn't DECLARED_ANALYSIS_INVALID: its own pass
+    never reaches `hidden`. Under this root, which reads `hidden` in `remote`'s `v1`, `hidden`
+    reads `lib.out` where `lib`, an analysis from a commit, isn't built. Those `MUST`s, which only
+    this root's pass finds in the commit's file, are reported there under their own codes, with
+    the declaration that leads to them as a related place."""
+    remote = tmp_path / "remote"
+    first = commit(remote, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIBRARY})
+    head = commit(remote, {"astra.yaml": HIDING.format(first=first)})
     assert api.validate(remote).diagnostics == ()
-    text = DRIVING_REMOTE.format(url=remote.as_uri(), commit=head)
+    text = PINNING_HIDDEN.format(url=remote.as_uri(), commit=head)
     report = api.validate(repository(tmp_path / "root", {"astra.yaml": text}))
-    assert found(report) == {
-        ("NOT_BUILT_IN_UNIVERSE", "astra.yaml", "/outputs/result/inputs/0", head)
-    }
-    (diagnostic,) = report.diagnostics
-    assert [(at.file, at.pointer, at.commit) for at in diagnostic.related] == [
-        ("astra.yaml", "/analyses/remote", None)
-    ]
+    place = ("astra.yaml", "/outputs/hidden/inputs/0", head)
+    assert found(report) == {("NOT_BUILT_IN_UNIVERSE", *place), ("UNDRIVEN_DECLARATION", *place)}
+    for diagnostic in report.diagnostics:
+        assert [(at.file, at.pointer, at.commit) for at in diagnostic.related] == [
+            ("astra.yaml", "/analyses/remote", None)
+        ]
 
 
 def test_a_file_whose_version_has_no_schema_isnt_judged_invalid(

@@ -1,6 +1,7 @@
 """Universes: effective selections, and `UNKNOWN_DERIVED_FROM`, `DERIVED_FROM_CYCLE`,
 `MISSING_REQUIRED_OPTION`, `INCOMPATIBLE_OPTIONS` and `EXCLUDED_OPTION_SELECTED`, and what is
-still checked for a universe with no effective selection.
+still checked for a universe with no effective selection; and `UNIVERSES_IN_SUB_ANALYSIS`, on
+small stacks of their own.
 
 The stacks share the root's two decisions and `subanalysis`, which the root's universes drive.
 The keeping one has `u1`, `u2` and `u3`; the breaking one, a universe for each way to break a
@@ -22,7 +23,7 @@ from astra._internal.analysis.universes import Selection, selections, written
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import WorktreeReader
-from tests.conftest import repository
+from tests.conftest import git, repository
 from tests.spec import SPEC
 
 SUBANALYSIS = """\
@@ -43,11 +44,8 @@ outputs:
     decisions: [decision1]
     recipe:
       command: python src/output1.py '{inputs.input1}' '{decisions.decision1}' '{output}'
-universes:
-  v1:
-    decisions: {decision1: a}
 """
-"""The declared analysis `subanalysis`, with a universe `v1` of its own."""
+"""The declared analysis `subanalysis`."""
 
 ROOT = """\
 spec_version: "0.1.0"
@@ -109,7 +107,7 @@ BROKEN = (
     decisions: {decision1: a, decision9: a}
   from_import:
     derived_from: subanalysis_v1
-  subanalysis_v1: {analysis: subanalysis, universe: v1}
+  subanalysis_v1: {analysis: subanalysis, universe: v1}   # names nothing: UNRESOLVED_ADDRESS
   loop1: {derived_from: loop2}
   loop2: {derived_from: loop1}
   itself: {derived_from: itself}
@@ -193,12 +191,6 @@ def test_the_effective_selections_resolve_derived_from(kept: Path) -> None:
         "decision2": "b",
         "subanalysis.decision1": "a",
     }
-
-
-def test_a_driven_analysiss_own_universes_have_effective_selections(kept: Path) -> None:
-    """A validator checks every universe of every analysis of the stack."""
-    found = effective(kept)
-    assert selected(found[Element(Identity("subanalysis"), "universe", "v1")]) == {"decision1": "a"}
 
 
 def test_the_kept_universes_break_no_rule_on_selections(kept: Path) -> None:
@@ -351,3 +343,130 @@ def test_the_iris_examples_constraints(tmp_path: Path) -> None:
     assert [r.pointer for r in incompatible.related] == [
         "/decisions/scaling/options/minmax/incompatible_with/0"
     ]
+
+
+# --- A sub-analysis's universes: UNIVERSES_IN_SUB_ANALYSIS ---
+
+
+DECIDING = """\
+spec_version: "0.1.0"
+decisions:
+  d:
+    options: {a: {}, b: {}}
+outputs:
+  out:
+    type: metric
+    format: json
+    decisions: [d]
+    recipe:
+      command: python make.py '{decisions.d}' '{output}'
+universes:
+  v1:
+    decisions: {d: a}
+"""
+"""An analysis with a universe `v1` of its own, which uses the decision it sets."""
+
+PLAIN = 'spec_version: "0.1.0"\n'
+"""An analysis with nothing in it."""
+
+
+def declaring(analyses: str, text: str = DECIDING) -> str:
+    """`text`, which declares `analyses` (a flow map)."""
+    return text.replace('spec_version: "0.1.0"\n', f'spec_version: "0.1.0"\nanalyses: {analyses}\n')
+
+
+def in_sub_analysis(report: api.ValidationReport) -> list[tuple[str, str, str | None, str | None]]:
+    """Each UNIVERSES_IN_SUB_ANALYSIS, as its file, its pointer, its key and its commit."""
+    return [
+        (d.location.file, d.location.pointer, d.location.key, d.location.commit)
+        for d in report.diagnostics
+        if d.code == "UNIVERSES_IN_SUB_ANALYSIS"
+    ]
+
+
+def head(top: Path) -> str:
+    return git(top, "rev-parse", "HEAD").strip()
+
+
+@pytest.mark.parametrize(
+    ("files", "key"),
+    [
+        (
+            {
+                "astra.yaml": declaring("{stage: {path: stage}}", PLAIN),
+                "stage/astra.yaml": DECIDING,
+            },
+            "v1",
+        ),
+        (  # an import is an entry of `universes` too
+            {
+                "astra.yaml": declaring("{stage: {path: stage}}"),
+                "stage/astra.yaml": declaring("{parent: {path: ..}}", PLAIN)
+                + "universes:\n  parent_v1: {analysis: parent, universe: v1}\n",
+            },
+            "parent_v1",
+        ),
+    ],
+    ids=["universe", "import"],
+)
+def test_an_entry_of_a_sub_analysiss_universes_breaks_universes_in_sub_analysis(
+    tmp_path: Path, files: dict[str, str], key: str
+) -> None:
+    """`stage`, in a folder below the top of its repository, is a sub-analysis: each entry of its
+    `universes` is an error, reported at its key in `stage`'s file, whether `stage` is validated
+    from the top, which declares it, or as the root."""
+    top = repository(tmp_path, files)
+    for root in (top, top / "stage"):
+        report = api.validate(root)
+        assert [d.code for d in report.diagnostics] == ["UNIVERSES_IN_SUB_ANALYSIS"]
+        assert in_sub_analysis(report) == [("stage/astra.yaml", "/universes", key, None)]
+        assert report.diagnostics[0].level == "error"
+
+
+def test_a_sub_analysiss_universe_at_a_commit_is_an_invalid_declared_analysis(
+    tmp_path: Path,
+) -> None:
+    """Analyses from a commit are judged by the rule too: the universe is reported in the
+    sub-analysis's file at that commit, and the declaration of it breaks
+    DECLARED_ANALYSIS_INVALID."""
+    top = repository(tmp_path, {"astra.yaml": PLAIN, "study/astra.yaml": DECIDING})
+    first = head(top)
+    root = declaring(f"{{old: {{path: study, commit: '{first}'}}}}", PLAIN)
+    report = api.validate(repository(top, {"astra.yaml": root}))
+    assert in_sub_analysis(report) == [("study/astra.yaml", "/universes", "v1", first)]
+    assert [d.code for d in report.diagnostics if d.location.commit is None] == [
+        "DECLARED_ANALYSIS_INVALID"
+    ]
+
+
+def test_universes_in_sub_analysis_names_the_top_from_the_sub_analysiss_folder(
+    tmp_path: Path,
+) -> None:
+    """The analysis at the top sets a sub-analysis's decisions: the message names it as a path
+    from the sub-analysis's folder, advises moving the entry there, and an analysis that needs
+    universes of its own to its own repository."""
+    files = {
+        "astra.yaml": declaring("{inner: {path: stage/inner}}", PLAIN),
+        "stage/inner/astra.yaml": DECIDING,
+    }
+    (diagnostic,) = api.validate(repository(tmp_path, files)).diagnostics
+    assert diagnostic.message.startswith(
+        "`v1` is in the `universes` of a sub-analysis, which has none: the analysis at the top "
+        "of its repository, `../..` from its folder, sets its decisions. Move `v1` there;"
+    )
+    assert diagnostic.message.endswith(
+        "an analysis that needs universes of its own goes in its own repository, declared by "
+        "`url` and `commit`"
+    )
+
+
+def test_the_top_keeps_universes_in_sub_analysis(tmp_path: Path) -> None:
+    """The analysis at the top of its repository has universes of its own, whether it is
+    validated as the root or reached from a sub-analysis that declares it."""
+    files = {
+        "astra.yaml": declaring("{stage: {path: stage}}"),
+        "stage/astra.yaml": declaring("{parent: {path: ..}}", PLAIN),
+    }
+    top = repository(tmp_path, files)
+    for root in (top, top / "stage"):
+        assert api.validate(root).diagnostics == ()

@@ -1,7 +1,7 @@
 {
-  "head": "4f9d748efd6d6620a78fb2006eedde5a06895fd3",
+  "head": "95f003f228633d2f4cffc76b502a7ac72a8777fa",
   "statuses": {
-    "shared": {
+    "stage:shared": {
       "state": "missing",
       "bytes": {
         "state": "absent"
@@ -10,9 +10,9 @@
         {
           "code": "MISSING_RECORD",
           "level": "error",
-          "message": "no record is at .astra/records/shared.json: build `shared`, and record it there",
+          "message": "no record is at stage/.astra/records/shared.json: build `shared`, and record it there",
           "location": {
-            "file": ".astra/records/shared.json",
+            "file": "stage/.astra/records/shared.json",
             "pointer": ""
           },
           "related": []
@@ -32,25 +32,6 @@
           "message": "no record is at .astra/records/baseline/stage.fit.json: build `stage.fit#baseline`, and record it there",
           "location": {
             "file": ".astra/records/baseline/stage.fit.json",
-            "pointer": ""
-          },
-          "related": []
-        }
-      ],
-      "stale_inputs": []
-    },
-    "stage:fit#local": {
-      "state": "missing",
-      "bytes": {
-        "state": "absent"
-      },
-      "why": [
-        {
-          "code": "MISSING_RECORD",
-          "level": "error",
-          "message": "no record is at stage/.astra/records/local/fit.json: build `fit#local`, and record it there",
-          "location": {
-            "file": "stage/.astra/records/local/fit.json",
             "pointer": ""
           },
           "related": []
@@ -129,26 +110,7 @@
           "location": {
             "file": "astra.yaml",
             "pointer": "/findings/fit/evidence/0/artifact",
-            "line": 28,
-            "column": 19
-          },
-          "related": []
-        }
-      ]
-    },
-    {
-      "insight": "findings.fit",
-      "index": 1,
-      "state": "missing",
-      "why": [
-        {
-          "code": "STALE_EVIDENCE",
-          "level": "error",
-          "message": "the evidence cites `stage:fit#local`: it is missing",
-          "location": {
-            "file": "astra.yaml",
-            "pointer": "/findings/fit/evidence/1/artifact",
-            "line": 29,
+            "line": 21,
             "column": 19
           },
           "related": []
@@ -157,7 +119,7 @@
     }
   ],
   "inputs": {
-    "inputs.seed": {
+    "stage.inputs.seed": {
       "state": "present"
     }
   },

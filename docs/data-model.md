@@ -578,9 +578,8 @@ that nothing reads, is named in the notes.
 | `commit` | [`Commit`](#commit), optional | The commit whose tree its places are in, where the analysis it belongs to is read at one; none for a result whose places are in the working tree |
 
 A result has no `command` where it isn't built from the working tree alone: a result of an
-analysis read at a commit, one whose recipe runs on a commit's files, or one that reads a file
-at a commit, unless [`resolve`](api.md#files-from-another-commit) was given the folder a runner
-puts such files in.
+analysis read at a commit, or one that reads a file at a commit, unless
+[`resolve`](api.md#files-from-another-commit) was given the folder a runner puts such files in.
 
 A result with a `commit` is a result from a commit: it is never built, its record is the one
 at that commit, and `write_records` refuses it.

@@ -34,15 +34,15 @@ from tests.conftest import (
     MINIMAL,
     RUNNER,
     build,
+    by_url,
     git,
     owner,
     remake,
     repository,
 )
 from tests.spec import DOCUMENTS
-from tests.test_planned import ROOT, SUBANALYSIS
-from tests.test_resolve import FROM_COMMIT as DRIVING
-from tests.test_resolve import INNER, LIB, PAIR, STAGE
+from tests.test_planned import PINNING, ROOT, SUBANALYSIS, UPSTREAM
+from tests.test_resolve import INNER, LIB, LONE, PAIR, STAGE
 from tests.test_validate import WORKED_EXAMPLE
 
 
@@ -558,7 +558,7 @@ def test_evidence_that_cites_no_result_is_missing_and_fails_the_check(tmp_path: 
     each of the root's universes where its analysis is built, here none, as the root has none,
     and if there are none, it is `missing`; `astra status` exits 1, though every planned result
     is unchanged."""
-    top = repository(tmp_path, {"astra.yaml": UNBUILT, "lib/astra.yaml": LIB})
+    top = repository(tmp_path, {"astra.yaml": UNBUILT, "lib/astra.yaml": LONE})
     build(top)
     report = api.status(top)
     assert statuses(report) == {"result": ("unchanged", "present")}
@@ -653,17 +653,13 @@ def test_a_declared_analysiss_evidence_citing_a_planned_result_gets_a_status(
 ) -> None:
     """A check covers the evidence of each declared analysis that cites a result
     the root plans, not only the root's. `subanalysis`'s `output1` cites its results in each of
-    the root's universes, as the root's evidence does, and not in `subanalysis`'s own `u1` and
-    `v1`, though `output5`'s pins plan them too. `unread`, which the root doesn't plan, gets no
-    status. A missing one fails the check (`STALE_EVIDENCE`), located in the file that holds
-    it."""
-    files = {
-        "astra.yaml": ROOT,
-        "data/input1.csv": "1\n",
-        "subanalysis/astra.yaml": CITING_SUBANALYSIS,
-        "subanalysis/data/input1.csv": "2\n",
-    }
-    top = repository(tmp_path, files)
+    the root's universes, as the root's evidence does. `unread`, which the root doesn't plan,
+    gets no status. A missing one fails the check (`STALE_EVIDENCE`), located in the file that
+    holds it. The root has no `output5` here, as `build` reads no result of another
+    repository's."""
+    root = ROOT.split("  output5:")[0] + "universes:" + ROOT.split("universes:")[1]
+    files = {**PINNING, "astra.yaml": root % by_url(tmp_path / "upstream", UPSTREAM)}
+    top = repository(tmp_path / "top", {**files, "subanalysis/astra.yaml": CITING_SUBANALYSIS})
     build(top)
     cites = ("subanalysis.output1#u1", "subanalysis.output1#u2")
     report = api.status(top)
@@ -674,10 +670,6 @@ def test_a_declared_analysiss_evidence_citing_a_planned_result_gets_a_status(
     # `unread` cites nothing planned: the analysis says so, and a check doesn't cover it.
     (own,) = api.resolve(top).analyses[1].findings
     assert [evidence.cites for evidence in own.evidence] == [cites, ()]
-    (top / "subanalysis" / ".astra" / "records" / "v1" / "output1.json").unlink()
-    report = api.status(top)
-    assert statuses(report)["subanalysis:output1#v1"] == ("missing", "absent")
-    assert [e.state for e in report.evidence] == ["unchanged", "unchanged"]
     (top / ".astra" / "records" / "u2" / "subanalysis.output1.json").unlink()
     report = api.status(top)
     assert [e.state for e in report.evidence] == ["missing", "missing"]
@@ -734,14 +726,16 @@ a commit that holds its records."""
 def test_results_of_an_analysis_from_a_commit_are_read_through_their_records(
     tmp_path: Path,
 ) -> None:
-    """`lib` is built at `A` and its records committed in `B`, which the root declares.
-    Its results are read through their records at `B`, unchanged where nothing changed between
-    `A` and `B`; only `out`, which a planned result reads, gets a bytes status, from what `B`
-    holds."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    build(top, top / "lib")
-    holding = git(repository(top, {}), "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": FROM_COMMIT % holding})
+    """`lib` is built at `A` and its records committed in `B`, which the root declares, in the
+    repository that holds `lib`, got from its `url`. Its results are read through their records
+    at `B`, unchanged where nothing changed between `A` and `B`; only `out`, which a planned
+    result reads, gets a bytes status, from what `B` holds."""
+    remote = repository(tmp_path / "remote", {"astra.yaml": LIB})
+    build(remote)
+    holding = git(repository(remote, {}), "rev-parse", "HEAD").strip()
+    url = remote.as_uri()
+    text = FROM_COMMIT.replace('{path: lib, commit: "%s"}', f"{{url: '{url}', commit: '%s'}}")
+    top = repository(tmp_path / "top", {"astra.yaml": text % holding})
     report = api.status(top)
     assert statuses(report) == {
         "lib:out#v1": ("unchanged", "present"),
@@ -750,28 +744,26 @@ def test_results_of_an_analysis_from_a_commit_are_read_through_their_records(
     }
     resolved = api.resolve(top)
     results = {result.id: result for result in resolved.results}
-    assert owner(resolved, results["lib:out#v1"]).commit == api.Commit(holding)
+    assert owner(resolved, results["lib:out#v1"]).commit == api.Commit(holding, url)
     # A result says itself which tree its places are in: a commit's, or the working tree.
     assert {id_: result.commit for id_, result in results.items()} == {
-        "lib:out#v1": api.Commit(holding),
+        "lib:out#v1": api.Commit(holding, url),
         "result": None,
-        "lib:once": api.Commit(holding),
+        "lib:once": api.Commit(holding, url),
     }
     with pytest.raises(ValueError, match="is a result from the commit"):
         run = api.Generation(holding, ENVIRONMENT, api.Runner("a-runner", "1"))
         api.write_records(top, results["lib:out#v1"], "sha256:" + "0" * 64, 1, run)
     assert git(top, "status", "--porcelain") == ""
     assert cited(api.resolve(top), report) == [("findings.insight1", 0, ("lib:once",), "unchanged")]
-    build(top)
-    assert {s[0] for s in statuses(api.status(top)).values()} == {"unchanged"}
 
 
 CHAINED = LIB.replace(
-    "universes:",
+    "universes:\n  v1:\n    decisions: {d: b}\n",
     "  twice:\n    type: metric\n    format: json\n    inputs: [once]\n"
-    "    recipe:\n      command: python make.py {inputs} '{output}'\nuniverses:",
+    "    recipe:\n      command: python make.py {inputs} '{output}'\n",
 )
-"""`lib`, whose `twice` reads its `once`."""
+"""`lib`, with no universes, whose `twice` reads its `once`."""
 
 
 def test_a_result_of_an_analysis_from_a_commit_that_a_planned_result_reads_has_its_bytes(
@@ -806,64 +798,18 @@ def test_a_result_of_an_analysis_from_a_commit_is_stale_where_its_commit_changed
     """Unchanged only where nothing STALE_RESULT compares changed between the commit its
     record names, `A`, and the declared one, `B`; and a result made from it is stale too,
     through the entry that reads it."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
+    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": CHAINED})
     build(top, top / "lib")
-    edited = LIB.replace("python make.py '{decisions.d}'", "python3 make.py '{decisions.d}'")
+    edited = CHAINED.replace("python make.py {inputs}", "python3 make.py {inputs}")
     holding = git(repository(top, {"lib/astra.yaml": edited}), "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": FROM_COMMIT % holding})
+    repository(top, {"astra.yaml": FROM_COMMIT.replace("lib.out#v1", "lib.twice") % holding})
     build(top)
     report = api.status(top)
-    assert statuses(report)["lib:out#v1"] == ("stale", "present")
-    assert errors(report.statuses["lib:out#v1"]) == ["STALE_RESULT"]
-    assert statuses(report)["lib:once"] == ("unchanged", None)
+    assert statuses(report)["lib:twice"] == ("stale", "present")
+    assert errors(report.statuses["lib:twice"]) == ["STALE_RESULT"]
+    assert statuses(report)["lib:once"] == ("unchanged", "present")
     found = report.statuses["result"]
-    assert (found.state, found.why, found.stale_inputs) == ("stale", (), ("lib.out#v1",))
-
-
-def test_results_of_an_analysis_from_another_repository_are_read_from_its_remote(
-    tmp_path: Path,
-) -> None:
-    """In the repository that holds that analysis at the commit it is read at, got from its
-    `url`, the record's own commit too."""
-    remote = repository(tmp_path / "remote", {"astra.yaml": LIB})
-    build(remote)
-    holding = git(repository(remote, {}), "rev-parse", "HEAD").strip()
-    url = remote.as_uri()
-    text = FROM_COMMIT.replace('{path: lib, commit: "%s"}', f"{{url: '{url}', commit: '%s'}}")
-    top = repository(tmp_path / "top", {"astra.yaml": text % holding})
-    report = api.status(top)
-    assert statuses(report) == {
-        "lib:out#v1": ("unchanged", "present"),
-        "result": ("missing", "absent"),
-        "lib:once": ("unchanged", None),
-    }
-    assert report.statuses["lib:out#v1"].why == ()
-    resolved = api.resolve(top)
-    results = {result.id: result for result in resolved.results}
-    assert owner(resolved, results["lib:out#v1"]).commit == api.Commit(holding, url)
-    assert report.evidence[0].state == "unchanged"
-
-
-def test_what_a_driver_builds_of_an_analysis_from_a_commit_is_checked_as_its_own(
-    tmp_path: Path,
-) -> None:
-    """What the root's universes build of `lib` belongs to the root, and
-    its record names the root's commit, at which the root's file declares `lib` at its commit;
-    a universe that selects another option for `lib`'s decision makes it stale, and what reads
-    it."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    build(top, top / "lib")
-    holding = git(repository(top, {}), "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": DRIVING % holding})
-    build(top)
-    assert {s[0] for s in statuses(api.status(top)).values()} == {"unchanged"}
-    (top / "astra.yaml").write_text((DRIVING % holding).replace("lib.d: a", "lib.d: b"))
-    report = api.status(top)
-    assert statuses(report)["lib.out#u1"][0] == "stale"
-    assert errors(report.statuses["lib.out#u1"]) == ["STALE_RESULT"]
-    assert statuses(report)["lib:out#v1"][0] == "unchanged"
-    found = report.statuses["result#u1"]
-    assert (found.state, errors(found), found.stale_inputs) == ("stale", [], ("lib.out",))
+    assert (found.state, found.why, found.stale_inputs) == ("stale", (), ("lib.twice",))
 
 
 # --- An analysis that breaks a MUST has no statuses ---

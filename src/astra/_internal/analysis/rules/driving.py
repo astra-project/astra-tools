@@ -1,15 +1,19 @@
 """The rules on driving. On selections: a universe's own `decisions` give each decision one
-key (`DUPLICATE_ELEMENT`), and no key goes through a declaration that leads back
-(`LOOPING_KEY`); every universe sets every decision it uses, of its analysis and of each analysis
-its analysis's universes drive (`MISSING_DECISION`); and every pin names a universe
-(`UNKNOWN_PIN_UNIVERSE`).
+key (`DUPLICATE_ELEMENT`); no key goes through a declaration that leads back (`LOOPING_KEY`), nor
+through one with a `commit` (`KEY_THROUGH_COMMIT`), whose analysis is only read, never driven;
+every universe sets every decision it uses, of its analysis and of each analysis its analysis's
+universes drive (`MISSING_DECISION`); and every pin names a universe (`UNKNOWN_PIN_UNIVERSE`).
 
 Every universe of every analysis of the stack is checked, a driven analysis's own included,
 with its own analysis driving (Results *uses*). A universe with no effective selection is
-checked by the first two on its own `decisions`, and not by `MISSING_DECISION`, which isn't
+checked by the first three on its own `decisions`, and not by `MISSING_DECISION`, which isn't
 checked either for a decision of an undetermined analysis, for one whose use is undetermined,
 nor through a chain whose driving is. A key or a reference that names nothing is checked by
-none, but for `LOOPING_KEY`, judged on its declarations as far as they resolve.
+none, but for `LOOPING_KEY` and `KEY_THROUGH_COMMIT`, judged on its declarations as far as they
+resolve, an undetermined one's included. A key through a commit still drives for the other
+rules, so that nothing follows from it: what it reaches isn't undriven, and an analysis that
+only such keys drive, which the specification drives through no such declaration, isn't checked
+by `MISSING_DECISION`.
 
 On the universe being built: what something reached reads of another analysis's,
 an output built per universe or a switch, and the decisions it uses, an output those it lists
@@ -31,7 +35,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 
 from astra._internal.analysis.rules.context import Context
-from astra._internal.analysis.stack import Element, Identity, Resolution
+from astra._internal.analysis.stack import Declaration, Element, Identity, Resolution
 from astra._internal.analysis.universes import Chain, Selection, built, looping, unlooped
 from astra._internal.documents import document
 from astra.model.diagnostic import Diagnostic
@@ -40,6 +44,7 @@ CODES = frozenset(
     {
         "DUPLICATE_ELEMENT",
         "LOOPING_KEY",
+        "KEY_THROUGH_COMMIT",
         "MISSING_DECISION",
         "UNKNOWN_PIN_UNIVERSE",
         "NOT_BUILT_IN_UNIVERSE",
@@ -59,6 +64,7 @@ def check(context: Context) -> Iterator[Diagnostic]:
             own = context.written[element]
             selection = context.selections[element]
             yield from _looping(context, own)
+            yield from _through_commit(context, own)
             yield from _duplicates(context, own, () if selection is None else selection.inherited)
             if selection is not None:
                 yield from _missing(context, selection, universe, building)
@@ -83,6 +89,35 @@ def _looping(context: Context, own: tuple[Resolution, ...]) -> Iterator[Diagnost
             )
             location = context.at(key.file, key.pointer, key.key)
             yield context.diagnostic("LOOPING_KEY", message, location)
+
+
+def _through_commit(context: Context, own: tuple[Resolution, ...]) -> Iterator[Diagnostic]:
+    """`KEY_THROUGH_COMMIT` at each key whose chain, as far as it resolves, goes through a
+    declaration with a `commit`."""
+    for key in own:
+        through = _from_commit(key.chain)
+        if through is None:
+            continue
+        spelled = ".".join(declaration.id for declaration in through)
+        message = (
+            f"`{key.key}` goes through `{spelled}`, {_read_only(through[-1])}: remove the key, "
+            "and read that analysis's results pinned to one of its own universes"
+        )
+        location = context.at(key.file, key.pointer, key.key)
+        yield context.diagnostic("KEY_THROUGH_COMMIT", message, location)
+
+
+def _from_commit(chain: Chain) -> Chain | None:
+    """`chain` up to its first declaration with a `commit`; None where it has none."""
+    end = next((i for i, d in enumerate(chain, 1) if d.declared.commit is not None), None)
+    return None if end is None else chain[:end]
+
+
+def _read_only(declaration: Declaration) -> str:
+    """That `declaration`, which has a `commit`, leads to an analysis only read, as a message
+    says it."""
+    how = "by `url` and `commit`" if declaration.declared.url is not None else "with a `commit`"
+    return f"declared {how}, whose analysis is only read, never driven"
 
 
 def _duplicates(
@@ -124,13 +159,17 @@ def _missing(
 ) -> Iterator[Diagnostic]:
     """Each decision the universe uses that its effective selection leaves unset, of the
     universe's analysis and of each analysis its analysis's universes drive (Results *uses*),
-    spelled through the first chain that reaches it."""
+    spelled through the first chain that reaches it through no declaration with a `commit`. An
+    analysis that only such chains reach is driven only by keys that break
+    `KEY_THROUGH_COMMIT`, whose analysis is never driven: none of its decisions is missing."""
     name = selection.universe
     used = context.used(name)
     pointer = ("universes", name.id, "decisions") if universe.decisions else ("universes", name.id)
     location = context.at(name.analysis, pointer)
     for identity, chains in building.items():
-        chain = chains[0]
+        chain = next((chain for chain in chains if _from_commit(chain) is None), None)
+        if chain is None:
+            continue
         for id_ in context.stack.analysis(identity).decisions:
             decision = Element(identity, "decision", id_)
             if decision not in used or selection.options(decision):
@@ -235,11 +274,17 @@ def _not_built(context: Context, uses: Uses) -> Iterator[Diagnostic]:
         where = "to" if entry.pin is not None else "in"
         message = (
             f"`{entry.written}` {_used(entry)} {_kind(element)} of `{element.analysis}` {where} "
-            f"{context.named(missing, entry.file)}, where that analysis isn't built: no "
-            "declaration those universes drive reaches it. Drive one from them"
+            f"{context.named(missing, entry.file)}, where that analysis isn't built: "
         )
-        if element.kind != "decision":
-            message += ", or pin one of its own universes"
+        through = _from_commit(entry.chain)
+        if through is not None:  # an analysis from a commit, which no universe here drives
+            spelled = ".".join(declaration.id for declaration in through)
+            message += f"it is read through `{spelled}`, {_read_only(through[-1])}. "
+            message += _instead(element)
+        else:
+            message += "no declaration those universes drive reaches it. Drive one from them"
+            if element.kind != "decision":
+                message += ", or pin one of its own universes"
         location = context.at(entry.file, entry.pointer)
         yield context.diagnostic("NOT_BUILT_IN_UNIVERSE", message, location)
 
@@ -263,12 +308,25 @@ def _undriven(context: Context, uses: Uses) -> Iterator[Diagnostic]:
         where = "to" if entry.pin is not None else "in"
         message = (
             f"`{entry.written}` {_used(entry)} {_kind(element)} {where} "
-            f"{context.named(theirs, entry.file)} through `{first}`, which this file's "
-            "universes don't drive: set a decision through it in their `decisions`, or reach "
-            "it through a declaration they drive"
+            f"{context.named(theirs, entry.file)} through `{first}`, "
         )
+        if entry.chain[end - 1].declared.commit is not None:  # only read: no universe drives it
+            message += f"{_read_only(entry.chain[end - 1])}: " + _instead(element).lower()
+        else:
+            message += (
+                "which this file's universes don't drive: set a decision through it in their "
+                "`decisions`, or reach it through a declaration they drive"
+            )
         location = context.at(entry.file, entry.pointer)
         yield context.diagnostic("UNDRIVEN_DECLARATION", message, location)
+
+
+def _instead(element: Element) -> str:
+    """What to do instead of using `element`, of an analysis from a commit, in a universe that
+    doesn't build that analysis: only its own universes set its decisions."""
+    if element.kind == "decision":
+        return "Use a decision of this analysis instead"
+    return "Pin one of its own universes"
 
 
 def _two_places(context: Context) -> Iterator[Diagnostic]:

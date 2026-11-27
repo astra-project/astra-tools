@@ -1,6 +1,6 @@
-"""`validate`: the root `astra.yaml` by the parse and schema rules, UNSUPPORTED_SPEC_VERSION and
-NOT_IN_REPOSITORY, and the report it gives. The validator rules of the stack have modules of
-their own (`test_names.py`, ...)."""
+"""`validate`: the root `astra.yaml` by the parse and schema rules, UNSUPPORTED_SPEC_VERSION,
+NOT_IN_REPOSITORY and MISSING_TOP_ANALYSIS, and the report it gives. The validator rules of the
+stack have modules of their own (`test_names.py`, ...)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from astra import api
 from astra._internal.analysis import rules, validate
 from astra._internal.documents import contract
 from astra._internal.documents.catalogue import Catalogue
-from tests.conftest import MINIMAL, analysis, git_init, repository
+from tests.conftest import MINIMAL, analysis, git, git_init, repository
 from tests.spec import SPEC
 
 
@@ -44,8 +44,76 @@ def test_an_analysis_in_a_working_tree_keeps_it(tmp_path: Path) -> None:
 
 
 def test_an_analysis_in_a_subfolder_is_named_from_the_repository_top(tmp_path: Path) -> None:
-    report = api.validate(analysis(git_init(tmp_path) / "stage" / "one"))
+    analysis(git_init(tmp_path))
+    report = api.validate(analysis(tmp_path / "stage" / "one"))
     assert (report.root, report.diagnostics) == ("stage/one/astra.yaml", ())
+
+
+# --- MISSING_TOP_ANALYSIS ---
+
+
+def test_a_root_below_a_top_with_no_astra_yaml_breaks_missing_top_analysis(
+    tmp_path: Path,
+) -> None:
+    """Reported in the root's file, as NOT_IN_REPOSITORY is, though that file is valid, naming
+    the top from the root's folder; one with only a `spec_version` at the top keeps it."""
+    report = api.validate(analysis(git_init(tmp_path) / "stage" / "one"))
+    assert pairs(report) == [("MISSING_TOP_ANALYSIS", "")]
+    diagnostic = report.diagnostics[0]
+    assert (diagnostic.level, diagnostic.location.file) == ("error", "stage/one/astra.yaml")
+    assert diagnostic.message.startswith(
+        "the top of this analysis's repository, `../..` from its folder, holds no astra.yaml file"
+    )
+    assert "put one there" in diagnostic.message
+    assert "astra init" not in diagnostic.message
+    assert not report.valid
+    analysis(tmp_path, 'spec_version: "0.1.0"\n')
+    assert api.validate(tmp_path / "stage" / "one").diagnostics == ()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "folder"])
+def test_a_top_astra_yaml_that_is_no_file_breaks_missing_top_analysis(
+    tmp_path: Path, kind: str
+) -> None:
+    """A symlink at the top, though it leads to a valid analysis, or a folder, isn't one."""
+    analysis(git_init(tmp_path) / "stage")
+    if kind == "symlink":
+        (tmp_path / "astra.yaml").symlink_to("stage/astra.yaml")
+    else:
+        (tmp_path / "astra.yaml").mkdir()
+        (tmp_path / "astra.yaml" / "notes.txt").write_text("a folder\n")
+    assert pairs(api.validate(tmp_path / "stage")) == [("MISSING_TOP_ANALYSIS", "")]
+
+
+def test_a_root_at_the_top_keeps_missing_top_analysis(tmp_path: Path) -> None:
+    """Whether or not its file is a valid document: the top holds it."""
+    analysis(git_init(tmp_path), MINIMAL + "name: Old\n")
+    assert pairs(api.validate(tmp_path)) == [("UNKNOWN_FIELD", "")]
+
+
+def test_missing_top_analysis_is_checked_whatever_the_roots_file_breaks(tmp_path: Path) -> None:
+    """As NOT_IN_REPOSITORY is: beside a schema rule its file breaks."""
+    report = api.validate(analysis(git_init(tmp_path) / "stage", MINIMAL + "name: Old\n"))
+    assert sorted(pairs(report)) == [("MISSING_TOP_ANALYSIS", ""), ("UNKNOWN_FIELD", "")]
+
+
+def test_a_root_read_at_a_commit_is_judged_at_that_commit(tmp_path: Path) -> None:
+    """A folder declared at a commit whose top held no astra.yaml is judged as its own root
+    there: MISSING_TOP_ANALYSIS at that commit, with the commit in its location, and
+    DECLARED_ANALYSIS_INVALID on the declaration. The top holds one now."""
+    top = repository(tmp_path, {"stage/astra.yaml": MINIMAL})
+    first = git(top, "rev-parse", "HEAD").strip()
+    root = MINIMAL + f"analyses: {{old: {{path: stage, commit: '{first}'}}}}\n"
+    repository(top, {"astra.yaml": root.replace("  result:", "  top_result:")})
+    report = api.validate(top)
+    found = [(d.code, d.location.file, d.location.commit) for d in report.diagnostics]
+    assert found == [
+        ("DECLARED_ANALYSIS_INVALID", "astra.yaml", None),
+        ("MISSING_TOP_ANALYSIS", "stage/astra.yaml", first),
+    ]
+    at_commit = report.diagnostics[1]
+    assert f"at `{first}`" in at_commit.message
+    assert "declare a commit whose top holds one" in at_commit.message
 
 
 @pytest.mark.parametrize(
@@ -306,11 +374,14 @@ def test_the_examples_are_found() -> None:
 
 @pytest.fixture(scope="module")
 def examples(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """astra-spec's `examples/`, committed in a repository of their own. They read no input
-    file, so there is none to write."""
+    """astra-spec's `examples/`, each committed in a repository of its own, whose top it is.
+    They read no input file, so there is none to write."""
     top = tmp_path_factory.mktemp("examples")
     shutil.copytree(SPEC / "examples", top / "examples")
-    return repository(top, {})
+    for example in (top / "examples").iterdir():
+        if example.is_dir():
+            repository(example, {})
+    return top
 
 
 @pytest.mark.parametrize("folder", EXAMPLES, ids=lambda path: path.relative_to(SPEC).as_posix())

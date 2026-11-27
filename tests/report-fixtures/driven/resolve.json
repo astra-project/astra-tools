@@ -1,6 +1,6 @@
 {
   "spec_version": "0.1.0",
-  "head": "4f9d748efd6d6620a78fb2006eedde5a06895fd3",
+  "head": "95f003f228633d2f4cffc76b502a7ac72a8777fa",
   "analyses": [
     {
       "key": "",
@@ -10,28 +10,9 @@
       "declares": {
         "stage": "stage"
       },
-      "inputs": [
-        {
-          "ref": "inputs.seed",
-          "path": "data/seed.txt",
-          "tags": []
-        }
-      ],
+      "inputs": [],
       "decisions": [],
       "outputs": [
-        {
-          "ref": "outputs.shared",
-          "type": "data",
-          "format": "txt",
-          "tags": [],
-          "decisions": [],
-          "inputs": [
-            {
-              "entry": "seed",
-              "target": "inputs.seed"
-            }
-          ]
-        },
         {
           "ref": "outputs.comparison",
           "type": "report",
@@ -40,17 +21,12 @@
           "decisions": [],
           "inputs": [
             {
-              "entry": "shared",
-              "target": "outputs.shared"
+              "entry": "stage.shared",
+              "target": "stage.outputs.shared"
             },
             {
               "entry": "stage.fit",
               "target": "stage.outputs.fit"
-            },
-            {
-              "entry": "stage.fit#local",
-              "target": "stage.outputs.fit",
-              "universe": "stage.universes.local"
             }
           ]
         }
@@ -60,7 +36,7 @@
         {
           "ref": "findings.fit",
           "kind": "finding",
-          "claim": "The driver compares two methods and the stage's own result.",
+          "claim": "The driver compares two methods.",
           "evidence": [
             {
               "cites": [
@@ -80,20 +56,6 @@
                   "output": "stage.outputs.fit",
                   "target_universe": "universes.alternate",
                   "result": "stage.fit#alternate"
-                }
-              ]
-            },
-            {
-              "cites": [
-                "stage:fit#local"
-              ],
-              "artifact": "stage.fit#local",
-              "bindings": [
-                {
-                  "universe": "stage.universes.local",
-                  "output": "stage.outputs.fit",
-                  "target_universe": "stage.universes.local",
-                  "result": "stage:fit#local"
                 }
               ]
             }
@@ -123,10 +85,14 @@
       "key": "stage",
       "folder": "stage",
       "tags": [],
-      "declares": {
-        "parent": ""
-      },
-      "inputs": [],
+      "declares": {},
+      "inputs": [
+        {
+          "ref": "stage.inputs.seed",
+          "path": "stage/data/seed.txt",
+          "tags": []
+        }
+      ],
       "decisions": [
         {
           "ref": "stage.decisions.method",
@@ -147,6 +113,19 @@
       ],
       "outputs": [
         {
+          "ref": "stage.outputs.shared",
+          "type": "data",
+          "format": "txt",
+          "tags": [],
+          "decisions": [],
+          "inputs": [
+            {
+              "entry": "seed",
+              "target": "stage.inputs.seed"
+            }
+          ]
+        },
+        {
           "ref": "stage.outputs.fit",
           "type": "metric",
           "format": "json",
@@ -156,41 +135,33 @@
           ],
           "inputs": [
             {
-              "entry": "parent.shared",
-              "target": "outputs.shared"
+              "entry": "shared",
+              "target": "stage.outputs.shared"
             }
           ]
         }
       ],
       "prior_insights": [],
       "findings": [],
-      "universes": [
-        {
-          "ref": "stage.universes.local",
-          "selection": {
-            "stage.decisions.method": "a"
-          },
-          "tags": []
-        }
-      ],
+      "universes": [],
       "switches": []
     }
   ],
   "results": [
     {
-      "id": "shared",
-      "output": "outputs.shared",
+      "id": "stage:shared",
+      "output": "stage.outputs.shared",
       "places": [
         {
           "address": "shared",
-          "record_path": ".astra/records/shared.json",
-          "file_path": "results/shared.txt"
+          "record_path": "stage/.astra/records/shared.json",
+          "file_path": "stage/results/shared.txt"
         }
       ],
       "inputs": [
         {
           "entry": "seed",
-          "input": "inputs.seed"
+          "input": "stage.inputs.seed"
         }
       ],
       "command": "cat data/seed.txt > results/shared.txt"
@@ -208,30 +179,11 @@
       "universe": "universes.baseline",
       "inputs": [
         {
-          "entry": "parent.shared",
-          "result": "shared"
+          "entry": "shared",
+          "result": "stage:shared"
         }
       ],
-      "command": "fit ../results/shared.txt a > ../results/baseline/stage.fit.json"
-    },
-    {
-      "id": "stage:fit#local",
-      "output": "stage.outputs.fit",
-      "places": [
-        {
-          "address": "fit#local",
-          "record_path": "stage/.astra/records/local/fit.json",
-          "file_path": "stage/results/local/fit.json"
-        }
-      ],
-      "universe": "stage.universes.local",
-      "inputs": [
-        {
-          "entry": "parent.shared",
-          "result": "shared"
-        }
-      ],
-      "command": "fit ../results/shared.txt a > results/local/fit.json"
+      "command": "fit results/shared.txt a > ../results/baseline/stage.fit.json"
     },
     {
       "id": "comparison#baseline",
@@ -246,19 +198,15 @@
       "universe": "universes.baseline",
       "inputs": [
         {
-          "entry": "shared",
-          "result": "shared"
+          "entry": "stage.shared",
+          "result": "stage:shared"
         },
         {
           "entry": "stage.fit",
           "result": "stage.fit#baseline"
-        },
-        {
-          "entry": "stage.fit#local",
-          "result": "stage:fit#local"
         }
       ],
-      "command": "cat results/shared.txt results/baseline/stage.fit.json stage/results/local/fit.json > results/baseline/comparison.txt"
+      "command": "cat stage/results/shared.txt results/baseline/stage.fit.json > results/baseline/comparison.txt"
     },
     {
       "id": "stage.fit#alternate",
@@ -273,11 +221,11 @@
       "universe": "universes.alternate",
       "inputs": [
         {
-          "entry": "parent.shared",
-          "result": "shared"
+          "entry": "shared",
+          "result": "stage:shared"
         }
       ],
-      "command": "fit ../results/shared.txt b > ../results/alternate/stage.fit.json"
+      "command": "fit results/shared.txt b > ../results/alternate/stage.fit.json"
     },
     {
       "id": "comparison#alternate",
@@ -292,46 +240,17 @@
       "universe": "universes.alternate",
       "inputs": [
         {
-          "entry": "shared",
-          "result": "shared"
+          "entry": "stage.shared",
+          "result": "stage:shared"
         },
         {
           "entry": "stage.fit",
           "result": "stage.fit#alternate"
-        },
-        {
-          "entry": "stage.fit#local",
-          "result": "stage:fit#local"
         }
       ],
-      "command": "cat results/shared.txt results/alternate/stage.fit.json stage/results/local/fit.json > results/alternate/comparison.txt"
+      "command": "cat stage/results/shared.txt results/alternate/stage.fit.json > results/alternate/comparison.txt"
     }
   ],
-  "notes": [
-    {
-      "code": "FALLBACK_PIN",
-      "level": "note",
-      "message": "`stage.fit#local` names `local` of `stage` only because this file has no universe `local`: adding one, or an import of that id, would change what it names",
-      "location": {
-        "file": "astra.yaml",
-        "pointer": "/outputs/comparison/inputs/2",
-        "line": 16,
-        "column": 33
-      },
-      "related": []
-    },
-    {
-      "code": "FALLBACK_PIN",
-      "level": "note",
-      "message": "`stage.fit#local` names `local` of `stage` only because this file has no universe `local`: adding one, or an import of that id, would change what it names",
-      "location": {
-        "file": "astra.yaml",
-        "pointer": "/findings/fit/evidence/1/artifact",
-        "line": 29,
-        "column": 19
-      },
-      "related": []
-    }
-  ],
+  "notes": [],
   "schema_version": "astra-tools.resolved-analysis.v1"
 }
