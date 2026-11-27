@@ -21,7 +21,7 @@ from click.testing import CliRunner, Result
 
 from astra import api
 from astra.cli import main
-from tests.conftest import build, owner, repository
+from tests.conftest import build, by_url, owner, repository
 from tests.test_switches import CHOOSING_FILES, NESTED_FILES, RUNNING_FILES, variant
 
 
@@ -61,8 +61,8 @@ def running(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def test_the_running_example_plans_what_results_lists(running: Path) -> None:
     """Results: the planned results are `output2`, `output1` in `u1` and `u2`, `output6` in
-    `u1`, `stage.output3` in `u1`, `u2` and `v1`, and `upstream.output4`; `output6` isn't built
-    in `u2`, where `switch1` has no case for `a`."""
+    `u1`, `stage.output3` in `u1` and `u2`, and `upstream.output4`; `output6` isn't built in
+    `u2`, where `switch1` has no case for `a`."""
     analysis = api.resolve(running)
     assert results(analysis) == {
         ("", "output2"),
@@ -71,7 +71,6 @@ def test_the_running_example_plans_what_results_lists(running: Path) -> None:
         ("", "output6#u1"),
         ("", "stage.output3#u1"),
         ("", "stage.output3#u2"),
-        ("stage", "output3#v1"),
         ("upstream", "output4"),
     }
     assert {r.id for r in analysis.results} == {
@@ -81,7 +80,6 @@ def test_the_running_example_plans_what_results_lists(running: Path) -> None:
         "output6#u1",
         "stage.output3#u1",
         "stage.output3#u2",
-        "stage:output3#v1",
         "upstream:output4",
     }
 
@@ -703,28 +701,38 @@ def test_evidence_bindings_keep_once_built_cases_and_authored_graph(tmp_path: Pa
 
 
 def test_bindings_and_authored_edges_survive_without_planned_results(tmp_path: Path) -> None:
-    files = {
-        "astra.yaml": 'spec_version: "0.1.0"\nanalyses: {child: {path: child}}\n',
-        "child/astra.yaml": CHECKED,
-    }
-    analysis = api.resolve(repository(tmp_path, files))
+    root = 'spec_version: "0.1.0"\nanalyses: {child: %s}\n'
+    files = {"astra.yaml": root % by_url(tmp_path / "child", {"astra.yaml": CHECKED})}
+    analysis = api.resolve(repository(tmp_path / "root", files))
     assert analysis.results == ()
     child = analysis.analyses[1]
     assert child.switches and child.outputs[-1].inputs
     # A pinned switch is evaluated in its own universe even when the root plans nothing.
-    files["child/astra.yaml"] = CHECKED.replace("artifact: sw", "artifact: sw#u1")
-    (tmp_path / "child/astra.yaml").write_text(files["child/astra.yaml"])
-    child = api.resolve(tmp_path).analyses[1]
+    pinned = {"astra.yaml": CHECKED.replace("artifact: sw", "artifact: sw#u1")}
+    (tmp_path / "root/astra.yaml").write_text(root % by_url(tmp_path / "child", pinned))
+    child = api.resolve(tmp_path / "root").analyses[1]
     assert child.findings[0].evidence[0].bindings == (
         api.EvidenceBinding("child.universes.u1", "child.outputs.base"),
     )
 
 
-def test_authored_graph_preserves_canonical_cross_analysis_pins(running: Path) -> None:
+def test_authored_graph_preserves_canonical_cross_analysis_pins(
+    running: Path, tmp_path: Path
+) -> None:
     root = api.resolve(running).analyses[0]
     output = next(output for output in root.outputs if output.ref == "outputs.output2")
     assert output.inputs == (
         api.AuthoredReference("output1#u1", "outputs.output1", "universes.u1"),
         api.AuthoredReference("output1#u2", "outputs.output1", "universes.u2"),
-        api.AuthoredReference("stage.output3#v1", "stage.outputs.output3", "stage.universes.v1"),
+    )
+    # Pinned to a universe of another analysis, which has universes of its own at a commit.
+    text = (
+        'spec_version: "0.1.0"\nanalyses: {child: %s}\noutputs:\n  compared:\n'
+        "    type: table\n    format: csv\n    inputs: [child.reader#u2]\n"
+        "    recipe:\n      command: python make.py {inputs} '{output}'\n"
+    )
+    files = {"astra.yaml": text % by_url(tmp_path / "child", {"astra.yaml": CHECKED})}
+    (output,) = api.resolve(repository(tmp_path / "root", files)).analyses[0].outputs
+    assert output.inputs == (
+        api.AuthoredReference("child.reader#u2", "child.outputs.reader", "child.universes.u2"),
     )

@@ -1,4 +1,4 @@
-"""Universes: a part's `universes` hold only imports (`UNIVERSES_IN_PART`); a universe's
+"""Universes: a sub-analysis has no `universes` (`UNIVERSES_IN_SUB_ANALYSIS`); a universe's
 `derived_from` names another of its analysis's universes (`UNKNOWN_DERIVED_FROM`) and its chain
 doesn't loop (`DERIVED_FROM_CYCLE`); its own `decisions` set only decisions it uses on some
 branch (`UNUSED_DECISION`), and should set only those it uses (`INACTIVE_DECISION`); its
@@ -6,11 +6,10 @@ effective selection keeps every constraint of the options it selects, among the 
 play (`MISSING_REQUIRED_OPTION`, `INCOMPATIBLE_OPTIONS`), and selects no excluded one
 (`EXCLUDED_OPTION_SELECTED`).
 
-A part reaches a folder outside its own by `path`, above the top of its repository included,
-in its file or through what it declares by `path` (`universes.parts`). Each of its universes
-that isn't an import breaks the first rule, reported at that universe with the declaration that
-reaches out as a related place, whether the part is validated as the root, driven or not, or
-read at a commit.
+A sub-analysis is an analysis in a folder below the top of its repository: one whose identity's
+folder isn't "". Each entry of its `universes`, an import included, breaks the first rule,
+reported at that entry, whether the sub-analysis is validated as the root, driven or not, or read
+at a commit.
 
 Every universe of every analysis of the stack is checked, on its
 effective selection (`universes.selections`), with its own analysis driving (Results *uses*,
@@ -34,6 +33,7 @@ the selection.
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Iterator, Mapping
 
 from astra._internal.analysis.rules.context import Context
@@ -49,7 +49,7 @@ from astra.model.diagnostic import Diagnostic, Location
 
 CODES = frozenset(
     {
-        "UNIVERSES_IN_PART",
+        "UNIVERSES_IN_SUB_ANALYSIS",
         "UNKNOWN_DERIVED_FROM",
         "DERIVED_FROM_CYCLE",
         "UNUSED_DECISION",
@@ -65,7 +65,7 @@ Constraints = Mapping[tuple[str, Element, str], tuple[Resolution, ...]]
 
 
 def check(context: Context) -> Iterator[Diagnostic]:
-    yield from _in_part(context)
+    yield from _in_sub_analysis(context)
     for member, analysis in context.stack.determined():
         for id_, written in analysis.universes.items():
             if written.derived_from is not None:
@@ -84,29 +84,23 @@ def check(context: Context) -> Iterator[Diagnostic]:
                     yield from _selected(context, constraints, selection, entry, play, maybe)
 
 
-def _in_part(context: Context) -> Iterator[Diagnostic]:
-    """`UNIVERSES_IN_PART` at each universe of a part that isn't an import, with the
-    declaration that makes its analysis a part as a related place."""
-    for identity, chain in context.parts.items():
-        reaching = chain[-1]
-        through = ".".join(declaration.id for declaration in chain)
-        related = context.at(reaching.owner, ("analyses", reaching.id, "path"))
-        for universe in own_universes(context.stack, identity):
-            if reaching.folder is None:
-                message = (
-                    f"`{universe.id}` is a universe of a part: through `{through}`, this "
-                    "analysis reaches above the top of its repository: declare that analysis by "
-                    "`url` and `commit` instead, or keep only imports here"
-                )
-            else:
-                message = (
-                    f"`{universe.id}` is a universe of a part: through `{through}`, this "
-                    f"analysis reaches the folder `{reaching.folder or '.'}`, outside its own, so "
-                    f"an analysis above it sets its decisions: move `{universe.id}` to that "
-                    "analysis, or keep only imports here"
-                )
-            at = context.at(identity, ("universes",), universe.id)
-            yield context.diagnostic("UNIVERSES_IN_PART", message, at, [related])
+def _in_sub_analysis(context: Context) -> Iterator[Diagnostic]:
+    """`UNIVERSES_IN_SUB_ANALYSIS` at each entry of a sub-analysis's `universes`, an import
+    included. The message names the top of its repository as a path from its folder."""
+    for member, analysis in context.stack.determined():
+        identity = member.identity
+        if not identity.folder:
+            continue
+        top = posixpath.relpath(".", identity.folder)
+        for id_ in analysis.universes:
+            message = (
+                f"`{id_}` is in the `universes` of a sub-analysis, which has none: the analysis at "
+                f"the top of its repository, `{top}` from its folder, sets its decisions. Move "
+                f"`{id_}` there; an analysis that needs universes of its own goes in its own "
+                "repository, declared by `url` and `commit`"
+            )
+            at = context.at(identity, ("universes",), id_)
+            yield context.diagnostic("UNIVERSES_IN_SUB_ANALYSIS", message, at)
 
 
 def _unused(context: Context) -> Iterator[Diagnostic]:

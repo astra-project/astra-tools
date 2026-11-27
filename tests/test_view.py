@@ -4,8 +4,7 @@ planned in it, with where its bytes go, what each entry of its output's `inputs`
 and its command as it runs.
 
 The stack is the worked example, with a `subanalysis` the root's universes drive, and an
-`other` they drive with nothing to set, as no universe of the root uses its decisions (Elements),
-read pinned to its own `v1`.
+`other` from another repository, read pinned to its own `v1`.
 """
 
 from __future__ import annotations
@@ -17,14 +16,14 @@ from click.testing import CliRunner, Result
 
 from astra import api
 from astra.cli import main
-from tests.conftest import MINIMAL, git, git_init, repository
-from tests.test_resolve import LIB
+from tests.conftest import MINIMAL, by_url, git, git_init, repository
+from tests.test_resolve import TABLES
 
 ROOT = """\
 spec_version: "0.1.0"
 analyses:
   subanalysis: {path: subanalysis}
-  other: {path: other}
+  other: %s
 inputs:
   input1: {path: data/input1.csv}
 decisions:
@@ -139,7 +138,7 @@ outputs:
   result:
     type: table
     format: csv
-    inputs: [lib.out#v1, lib.once]
+    inputs: [lib.once]
     decisions: [method]
     recipe:
       command: python make.py {inputs} '{decisions.method}' '{output}'
@@ -147,8 +146,7 @@ universes:
   u1:
     decisions: {method: a}
 """
-"""A root that reads `lib`, at a commit, only as `lib` builds it: its `out` pinned to `lib`'s own
-`v1`, and its `once`, built once."""
+"""A root that reads `lib`, at a commit, only as `lib` builds it: its `once`, built once."""
 
 
 def astra(*args: str) -> Result:
@@ -158,10 +156,9 @@ def astra(*args: str) -> Result:
 @pytest.fixture(scope="module")
 def top(tmp_path_factory: pytest.TempPathFactory) -> Path:
     files = {
-        "astra.yaml": ROOT,
+        "astra.yaml": ROOT % by_url(tmp_path_factory.mktemp("other"), {"astra.yaml": OTHER}),
         "data/input1.csv": "1\n",
         "subanalysis/astra.yaml": SUBANALYSIS,
-        "other/astra.yaml": OTHER,
     }
     return repository(tmp_path_factory.mktemp("view"), files)
 
@@ -232,10 +229,11 @@ def test_astra_view_shows_what_an_entry_reads_through_a_switch(tmp_path: Path) -
 def test_astra_view_shows_no_command_for_what_isnt_built_from_the_working_tree_alone(
     tmp_path: Path,
 ) -> None:
-    """`result#u1` reads `lib`'s own results, from the commit `lib` is read at, by the ids
-    `lib:out#v1` and `lib:once`, which a runner reads at that commit and doesn't build: it has
-    no command to show."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
+    """`result#u1` reads `lib`'s own result, from the commit `lib` is read at, by the id
+    `lib:once`, which a runner reads at that commit and doesn't build: it has no command to
+    show."""
+    files = {"astra.yaml": MINIMAL, "lib/astra.yaml": TABLES, "lib/data/table.csv": "1\n"}
+    top = repository(tmp_path, files)
     commit = git(top, "rev-parse", "HEAD").strip()
     repository(top, {"astra.yaml": FROM_COMMIT % commit})
     result = astra("view", "u1", str(top))
@@ -244,7 +242,6 @@ def test_astra_view_shows_no_command_for_what_isnt_built_from_the_working_tree_a
         "universe u1",
         "  decisions.method = a",
         "result#u1  results/u1/result.csv",
-        "  lib.out#v1 reads lib:out#v1",
         "  lib.once reads lib:once",
     ]
 
@@ -259,9 +256,10 @@ def test_astra_view_of_a_universe_the_root_hasnt_is_a_usage_error(top: Path, uni
 
 def test_an_invalid_analysis_has_no_view(tmp_path: Path) -> None:
     """`astra view` prints the validation report, as `astra validate` does, and exits 1."""
-    files = {"astra.yaml": ROOT.replace("decision1: b, ", ""), "data/input1.csv": "1\n"}
-    files |= {"subanalysis/astra.yaml": SUBANALYSIS, "other/astra.yaml": OTHER}
-    folder = repository(tmp_path, files)
+    other = by_url(tmp_path / "other", {"astra.yaml": OTHER})
+    files = {"astra.yaml": ROOT.replace("decision1: b, ", "") % other, "data/input1.csv": "1\n"}
+    files |= {"subanalysis/astra.yaml": SUBANALYSIS}
+    folder = repository(tmp_path / "root", files)
     with pytest.raises(api.InvalidAnalysisError):
         api.resolve(folder)
     result = astra("view", "u1", str(folder))

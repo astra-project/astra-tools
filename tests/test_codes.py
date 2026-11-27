@@ -122,11 +122,8 @@ outputs:
         OUTPUT.replace("'{output}'", "'{inputs.input2}' '{output}'"),
         "/outputs/result/recipe/command",
     ),
-    "UNIVERSES_IN_PART": Case(
-        "analyses: {up: {path: ..}}\n"
-        + DECISIONS
-        + "universes: {u1: {decisions: {decision1: a}}}\n",
-        "/universes",
+    "UNIVERSES_IN_SUB_ANALYSIS": Case(
+        DECISIONS + "universes: {u1: {decisions: {decision1: a}}}\n", "/universes"
     ),
     "UNKNOWN_DERIVED_FROM": Case(
         DECISIONS + "universes:\n  u1: {decisions: {decision1: a}}\n  u2: {derived_from: u9}\n",

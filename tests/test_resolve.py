@@ -5,12 +5,12 @@ results that aren't built from the working tree alone, which have no command; wh
 notes; and the model as JSON.
 
 The stacks are a worked example; astra-spec's `examples/iris_pipeline`; `output5` reading
-`subanalysis` in three universes, where `subanalysis`'s own `v1` drives its `inner`, with an
-output of every placeholder; a part, driving, whose paths climb out of its folder; an analysis
-with a declaration no key drives, whose outputs nothing reads; `inner` reached through `inner`
-and `stage.inner`; analyses reached by chains of one length; an analysis from a commit, read
-pinned and built once; an analysis with every optional field and one with none; and one with
-each note a stack read as the root is can have.
+`subanalysis` and `upstream`, a remote, in three universes, where `upstream`'s own `v1` drives
+its `inner`, with an output of every placeholder; a sub-analysis, driving, whose paths climb out
+of its folder; an analysis with a declaration no key drives, whose outputs nothing reads; `inner`
+reached through `inner` and `stage.inner`; analyses reached by chains of one length; an analysis
+from a commit, read pinned and built once; an analysis with every optional field and one with
+none; and one with each note a stack read as the root is can have.
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ from typing import Any
 import pytest
 
 from astra import api
-from tests.conftest import MINIMAL, analysis, git, git_init, owner, repository
+from tests.conftest import MINIMAL, analysis, by_url, git, git_init, owner, repository
 from tests.spec import SPEC
-from tests.test_planned import PINNING, ROOT
+from tests.test_planned import PINNING, ROOT, UPSTREAM
 from tests.test_validate import WORKED_EXAMPLE
 
 
@@ -316,20 +316,22 @@ PLACEHOLDERS = """\
 
 @pytest.fixture(scope="module")
 def pinning(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    upstream = by_url(tmp_path_factory.mktemp("upstream"), UPSTREAM)
     files = {
         **PINNING,
-        "astra.yaml": ROOT.replace("universes:\n", PLACEHOLDERS + "universes:\n", 1),
+        "astra.yaml": ROOT.replace("universes:\n", PLACEHOLDERS + "universes:\n", 1) % upstream,
     }
     return repository(tmp_path_factory.mktemp("pinning"), files)
 
 
 def test_output5s_three_pins_read_three_results_each_in_its_owners_folder(pinning: Path) -> None:
     """`subanalysis.output1#u1` reads the root's result, named `subanalysis.output1`;
-    `#subanalysis_u1` and `#v1` read `subanalysis`'s own, in its folder under its universes' own
-    ids; `subanalysis.inner.output2#subanalysis_v1` reads `inner`'s `output2` as `subanalysis`'s
-    `v1` builds it, through `inner: {path: inner}`, named `inner.output2` there, which runs in
-    `inner`'s folder. A result that belongs to another analysis than the driving one has that
-    analysis's key before its address, in its id."""
+    `upstream.output1#upstream_u1` and `#v1` read `upstream`'s own, in its tree at its commit,
+    under its universes' own ids; `upstream.inner.output2#upstream_v1` reads `inner`'s `output2`
+    as `upstream`'s `v1` builds it, through `inner: {path: inner}`, named `inner.output2` there,
+    in `inner`'s folder. Each is a result from a commit, with no command. A result that belongs
+    to another analysis than the driving one has that analysis's key before its address, in its
+    id."""
     analysis = api.resolve(pinning)
     assert set(results(analysis)) == {
         ("", "output1#u1"),
@@ -339,9 +341,9 @@ def test_output5s_three_pins_read_three_results_each_in_its_owners_folder(pinnin
         ("", "output5"),
         ("", "subanalysis.output1#u1"),
         ("", "subanalysis.output1#u2"),
-        ("subanalysis", "output1#u1"),
-        ("subanalysis", "output1#v1"),
-        ("subanalysis", "inner.output2#v1"),
+        ("upstream", "output1#u1"),
+        ("upstream", "output1#v1"),
+        ("upstream", "inner.output2#v1"),
     }
     assert each_after_what_it_reads(analysis)
     found = by_id(analysis)
@@ -353,50 +355,46 @@ def test_output5s_three_pins_read_three_results_each_in_its_owners_folder(pinnin
         "output5",
         "subanalysis.output1#u1",
         "subanalysis.output1#u2",
-        "subanalysis:output1#u1",
-        "subanalysis:output1#v1",
-        "subanalysis:inner.output2#v1",
+        "upstream:output1#u1",
+        "upstream:output1#v1",
+        "upstream:inner.output2#v1",
     }
     output5 = found["output5"]
     assert output5.inputs == (
         api.Source("subanalysis.output1#u1", result="subanalysis.output1#u1"),
-        api.Source("subanalysis.output1#subanalysis_u1", result="subanalysis:output1#u1"),
-        api.Source("subanalysis.output1#v1", result="subanalysis:output1#v1"),
-        api.Source(
-            "subanalysis.inner.output2#subanalysis_v1", result="subanalysis:inner.output2#v1"
-        ),
+        api.Source("upstream.output1#upstream_u1", result="upstream:output1#u1"),
+        api.Source("upstream.output1#v1", result="upstream:output1#v1"),
+        api.Source("upstream.inner.output2#upstream_v1", result="upstream:inner.output2#v1"),
     )
     reads = [found[read.result] for read in output5.inputs if read.result is not None]
     assert [owner(analysis, result).key for result in reads] == [
         "",
-        "subanalysis",
-        "subanalysis",
-        "subanalysis",
+        "upstream",
+        "upstream",
+        "upstream",
     ]
     assert [result.places[0].file_path for result in reads] == [
         "results/u1/subanalysis.output1.json",
-        "subanalysis/results/u1/output1.json",
-        "subanalysis/results/v1/output1.json",
-        "subanalysis/results/v1/inner.output2.json",
+        "results/u1/output1.json",
+        "results/v1/output1.json",
+        "results/v1/inner.output2.json",
     ]
     assert [result.places[0].record_path for result in reads] == [
         ".astra/records/u1/subanalysis.output1.json",
-        "subanalysis/.astra/records/u1/output1.json",
-        "subanalysis/.astra/records/v1/output1.json",
-        "subanalysis/.astra/records/v1/inner.output2.json",
+        ".astra/records/u1/output1.json",
+        ".astra/records/v1/output1.json",
+        ".astra/records/v1/inner.output2.json",
     ]
     inner = reads[3]
     assert (inner.output, inner.universe) == (
-        "subanalysis.inner.outputs.output2",
-        "subanalysis.universes.v1",
+        "upstream.inner.outputs.output2",
+        "upstream.universes.v1",
     )
     assert (runs_in(analysis, inner), made_with(analysis, inner)) == (
-        "subanalysis/inner",
-        {"subanalysis.inner.decisions.decision2": "a"},
+        "inner",
+        {"upstream.inner.decisions.decision2": "a"},
     )
-    assert inner.command == (
-        "python src/output2.py 'data/input2.csv' 'a' '../results/v1/inner.output2.json'"
-    )
+    assert inner.command is None
 
 
 def test_each_placeholder_is_filled_with_what_its_result_gives(pinning: Path) -> None:
@@ -448,10 +446,15 @@ def test_each_element_has_a_ref_under_its_analysiss_key(pinning: Path) -> None:
     `inner.decision2` is `subanalysis.inner.decisions.decision2`. An analysis's universes are
     its own: an import, which selects nothing, isn't one."""
     analysis = api.resolve(pinning)
-    root, sub, inner = analysis.analyses
-    assert (root.key, sub.key, inner.key) == ("", "subanalysis", "subanalysis.inner")
+    root, sub, inner, up, _ = analysis.analyses
+    assert (root.key, sub.key, inner.key, up.key) == (
+        "",
+        "subanalysis",
+        "subanalysis.inner",
+        "upstream",
+    )
     assert (dict(root.declares), dict(sub.declares), dict(inner.declares)) == (
-        {"subanalysis": "subanalysis"},
+        {"subanalysis": "subanalysis", "upstream": "upstream"},
         {"inner": "subanalysis.inner"},
         {},
     )
@@ -472,8 +475,12 @@ def test_each_element_has_a_ref_under_its_analysiss_key(pinning: Path) -> None:
         ["subanalysis.inputs.input1"],
         ["subanalysis.decisions.decision1"],
         ["subanalysis.outputs.output1", "subanalysis.outputs.unread"],
-        ["subanalysis.universes.u1", "subanalysis.universes.v1"],
         [],
+        [],
+    ]
+    assert [universe.ref for universe in up.universes] == [
+        "upstream.universes.u1",
+        "upstream.universes.v1",
     ]
     assert {output.ref: output.decisions for output in (*root.outputs, *sub.outputs)} == {
         "outputs.output1": ("decisions.decision1",),
@@ -489,23 +496,23 @@ def test_each_element_has_a_ref_under_its_analysiss_key(pinning: Path) -> None:
 
 def test_a_universes_selection_is_by_ref_with_its_own_analysis_driving(pinning: Path) -> None:
     """Each universe gives the option it selects for each decision it uses, by the decision's
-    ref: the root's set `subanalysis`'s decision, and `subanalysis`'s own set `inner`'s, which
+    ref: the root's set `subanalysis`'s decision, and `upstream`'s own set its `inner`'s, which
     its `unread` lists. Every result is made with an option for each decision its output lists,
     found in its universe's selection."""
     analysis = api.resolve(pinning)
-    root, sub, _ = analysis.analyses
+    root, up = analysis.analyses[0], by_key(analysis)["upstream"]
     assert {universe.ref: dict(universe.selection) for universe in root.universes} == {
         "universes.u1": {"decisions.decision1": "a", "subanalysis.decisions.decision1": "a"},
         "universes.u2": {"decisions.decision1": "b", "subanalysis.decisions.decision1": "b"},
     }
-    assert {universe.ref: dict(universe.selection) for universe in sub.universes} == {
-        "subanalysis.universes.u1": {
-            "subanalysis.decisions.decision1": "a",
-            "subanalysis.inner.decisions.decision2": "b",
+    assert {universe.ref: dict(universe.selection) for universe in up.universes} == {
+        "upstream.universes.u1": {
+            "upstream.decisions.decision1": "a",
+            "upstream.inner.decisions.decision2": "b",
         },
-        "subanalysis.universes.v1": {
-            "subanalysis.decisions.decision1": "b",
-            "subanalysis.inner.decisions.decision2": "a",
+        "upstream.universes.v1": {
+            "upstream.decisions.decision1": "b",
+            "upstream.inner.decisions.decision2": "a",
         },
     }
     assert {result.id: made_with(analysis, result) for result in analysis.results} == {
@@ -516,9 +523,9 @@ def test_a_universes_selection_is_by_ref_with_its_own_analysis_driving(pinning: 
         "output5": {},
         "subanalysis.output1#u1": {"subanalysis.decisions.decision1": "a"},
         "subanalysis.output1#u2": {"subanalysis.decisions.decision1": "b"},
-        "subanalysis:output1#u1": {"subanalysis.decisions.decision1": "a"},
-        "subanalysis:output1#v1": {"subanalysis.decisions.decision1": "b"},
-        "subanalysis:inner.output2#v1": {"subanalysis.inner.decisions.decision2": "a"},
+        "upstream:output1#u1": {"upstream.decisions.decision1": "a"},
+        "upstream:output1#v1": {"upstream.decisions.decision1": "b"},
+        "upstream:inner.output2#v1": {"upstream.inner.decisions.decision2": "a"},
     }
 
 
@@ -546,9 +553,9 @@ findings:
     claim: The stage reads the parent's input and result.
     evidence: [{artifact: stage.output3}]
 """
-"""The top of a repository, whose `stage` is a part."""
+"""The top of a repository, whose `stage` is a sub-analysis."""
 
-PART = """\
+READS_PARENT = """\
 spec_version: "0.1.0"
 analyses:
   parent: {path: ..}
@@ -564,29 +571,29 @@ outputs:
         python src/output3.py '{inputs.input3}' '{inputs.parent.input1}'
         '{inputs.parent.output1#u1}' '{output}'
 """
-"""`stage`, a part, which declares its parent and reads its input and its result in its `u1`."""
+"""`stage`, which declares its parent and reads its input and its result in its `u1`."""
 
 
 @pytest.fixture(scope="module")
-def part(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def reads_parent(tmp_path_factory: pytest.TempPathFactory) -> Path:
     files = {
         "astra.yaml": PARENT,
         "data/input1.csv": "1\n",
-        "stage/astra.yaml": PART,
+        "stage/astra.yaml": READS_PARENT,
         "stage/data/input3.csv": "3\n",
     }
-    return repository(tmp_path_factory.mktemp("part"), files)
+    return repository(tmp_path_factory.mktemp("reads_parent"), files)
 
 
-def test_the_models_paths_are_from_the_driving_analysiss_folder(part: Path) -> None:
+def test_the_models_paths_are_from_the_driving_analysiss_folder(reads_parent: Path) -> None:
     """Every path of the model is from the folder of the driving analysis, wherever that is in
-    its repository: with the part `stage` driving, its own files are named from its folder,
+    its repository: with `stage` driving, its own files are named from its folder,
     which is `.`, and its parent's, the analysis above it, climb out of it, as does the folder
     its parent's result runs in. A note's location isn't such a path: the note on `#u1`, which
     names the parent's `u1` as `stage` has none, names `stage`'s file from the top of the
     repository, as a validator's does. The parent declares the driving analysis back, whose key
     is "", and its finding cites `stage.output3`'s one result."""
-    analysis = api.resolve(part / "stage")
+    analysis = api.resolve(reads_parent / "stage")
     driving, parent = analysis.analyses
     assert [(each.key, each.folder, dict(each.declares)) for each in analysis.analyses] == [
         ("", ".", {"parent": "parent"}),
@@ -962,7 +969,7 @@ universes:
 FROM_COMMIT = """\
 spec_version: "0.1.0"
 analyses:
-  lib: {path: lib, commit: "%s"}
+  lib: {path: ., commit: "%s"}
 outputs:
   result:
     type: table
@@ -976,68 +983,9 @@ outputs:
     recipe:
       command: python make.py '{output}'
 """
-"""A root that reads `lib`, at a commit, only as `lib` builds it: its `out` pinned to `lib`'s own
-`v1`, and its `once`, built once; and `alone`, which reads nothing. Nothing at a commit is
-driven, so no universe of the root sets `lib`'s decisions."""
-
-
-def test_only_a_result_built_from_the_working_tree_alone_has_a_command(tmp_path: Path) -> None:
-    """`lib` is read at a commit, which its analysis gives. `lib`'s results in its own `v1`, and
-    its output built once, are `lib`'s at that commit, results from a commit, read through their
-    records, each at a place in that commit's tree, from the top of its repository; and `result`
-    reads both. None of those is built from the working tree alone, so none has a command, as
-    `alone` has."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    commit = git(top, "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": FROM_COMMIT % commit})
-    analysis = api.resolve(top)
-    assert [(each.key, each.folder, each.commit) for each in analysis.analyses] == [
-        ("", ".", None),
-        ("lib", "lib", api.Commit(commit)),
-    ]
-    assert {
-        result.id: (owner(analysis, result).key, runs_in(analysis, result), result.command)
-        for result in analysis.results
-    } == {
-        "lib:out#v1": ("lib", "lib", None),
-        "lib:once": ("lib", "lib", None),
-        "result": ("", ".", None),
-        "alone": ("", ".", "python make.py 'results/alone.json'"),
-    }
-    found = by_id(analysis)
-    assert found["result"].inputs == (
-        api.Source("lib.out#v1", result="lib:out#v1"),
-        api.Source("lib.once", result="lib:once"),
-    )
-    assert {
-        id_: (found[id_].places[0].record_path, found[id_].places[0].file_path)
-        for id_ in ("lib:out#v1", "lib:once")
-    } == {
-        "lib:out#v1": ("lib/.astra/records/v1/out.json", "lib/results/v1/out.json"),
-        "lib:once": ("lib/.astra/records/once.json", "lib/results/once.json"),
-    }
-    assert each_after_what_it_reads(analysis)
-
-
-def test_a_result_from_a_commit_has_no_command_wherever_files_are_put(tmp_path: Path) -> None:
-    """Given where a runner puts the files it gives a recipe from another commit, `result`,
-    which reads two results from a commit, one pinned to a universe and one built once, has a
-    command naming each where the runner puts it, under `<commits>/<commit id>/` at its path in
-    that commit's tree. What is `lib`'s at that commit still has none."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    commit = git(top, "rev-parse", "HEAD").strip()
-    repository(top, {"astra.yaml": FROM_COMMIT % commit})
-    analysis = api.resolve(top, commits=".lightcone/commits")
-    at = f".lightcone/commits/{commit}"
-    assert {result.id: result.command for result in analysis.results} == {
-        "lib:out#v1": None,
-        "lib:once": None,
-        "result": (
-            f"python make.py {at}/lib/results/v1/out.json {at}/lib/results/once.json "
-            "'results/result.csv'"
-        ),
-        "alone": "python make.py 'results/alone.json'",
-    }
+"""A root that reads `lib`, its own folder at a commit where it held `LIB`, only as `lib` builds
+it: its `out` pinned to `lib`'s own `v1`, and its `once`, built once; and `alone`, which reads
+nothing. Nothing at a commit is driven, so no universe of the root sets `lib`'s decisions."""
 
 
 TABLES = """\
@@ -1172,10 +1120,12 @@ def test_each_output_carries_what_its_recipe_asks_for(tmp_path: Path) -> None:
 def test_a_pin_that_names_another_analysiss_universe_by_the_fallback_is_noted(
     pinning: Path,
 ) -> None:
-    """The root's `subanalysis.output1#v1` names `subanalysis`'s `v1` only because the root's file
-    has no universe `v1`, so adding one would change what it names. That is noted, though it breaks
+    """The root's `upstream.output1#v1` names `upstream`'s `v1` only because the root's file has
+    no universe `v1`, so adding one would change what it names. That is noted, though it breaks
     no rule; the pins naming the root's own `u1` and its imports aren't."""
     analysis = api.resolve(pinning)
+    up = by_key(analysis)["upstream"].commit
+    assert up is not None
     (note,) = noted(analysis, "FALLBACK_PIN")
     assert (note.level, note.location.file, note.location.pointer) == (
         "note",
@@ -1183,7 +1133,7 @@ def test_a_pin_that_names_another_analysiss_universe_by_the_fallback_is_noted(
         "/outputs/output5/inputs/2",
     )
     assert note.message == (
-        "`subanalysis.output1#v1` names `v1` of `subanalysis` only because this file has no "
+        f"`upstream.output1#v1` names `v1` of `. at {up.id}` only because this file has no "
         "universe `v1`: adding one, or an import of that id, would change what it names"
     )
 
@@ -1245,10 +1195,11 @@ def test_each_output_with_no_planned_result_is_noted(pinning: Path, tmp_path: Pa
     """An output of a declared analysis that no planned result reads and the
     root's evidence doesn't cite, and an output of the root built per universe where the root
     has no universes, have no planned result, so a check of the root never covers them. Each is
-    noted at the output, in the files read as the root is."""
+    noted at the output, in the files read as the root is: not `upstream`'s, read at a commit."""
     found = noted(api.resolve(pinning), "UNPLANNED_OUTPUT")
     assert [(n.level, n.location.file, n.location.pointer) for n in found] == [
-        ("note", "subanalysis/astra.yaml", "/outputs/unread")
+        ("note", "subanalysis/astra.yaml", "/outputs/unread"),
+        ("note", "subanalysis/inner/astra.yaml", "/outputs/output2"),
     ]
     assert found[0].message == (
         "`unread` has no planned result: no planned result reads it and the root's evidence "
@@ -1802,7 +1753,7 @@ def test_a_note_and_a_commit_write_as_json_too(tmp_path: Path) -> None:
     one in a file of the working tree. An analysis read at a commit gives the commit, and no
     repository where that is the driving analysis's; a result with no command has none in its
     JSON."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
+    top = repository(tmp_path, {"astra.yaml": LIB})
     commit = git(top, "rev-parse", "HEAD").strip()
     repository(top, {"astra.yaml": FROM_COMMIT % commit})
     written = api.resolve(top).to_json()

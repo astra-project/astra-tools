@@ -3,11 +3,11 @@
 `UNKNOWN_PIN_UNIVERSE`, with what isn't checked through an undetermined analysis, a name that
 names nothing or a key that loops; and the universe each pin and import names.
 
-The first stacks hold `stage`, a part with no universes of its own, which declares `inner`,
-`again: {path: .}` and `parent: {path: ..}`, with the root declaring `inner` a second time: a
-keeping one, whose keys spell `stage.inner.d` and `inner.d`, and a breaking one. Then come keys
-through a declaration with a `commit`, whose analysis is only read. The last has `output5`, with
-the import `subanalysis_v1`.
+The first stacks hold `stage`, which declares `inner`, `again: {path: .}` and `parent: {path: ..}`,
+with the root declaring `inner` a second time: a keeping one, whose keys spell `stage.inner.d` and
+`inner.d`, and a breaking one. Then come keys through a declaration with a `commit`, whose
+analysis is only read. The last has `output5`, reading the remote `subanalysis`, with the import
+`subanalysis_v1`.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from astra._internal.analysis.universes import Chain, built, imports, pins
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.git import Repository
 from astra._internal.sources.reader import WorktreeReader
-from tests.conftest import git, repository
+from tests.conftest import by_url, git, repository
 from tests.spec import SPEC
 
 OUTPUT = """\
@@ -60,8 +60,8 @@ decisions:
 """ + (OUTPUT % "stage_result").replace(
     "    recipe:", "    decisions: [d, inner.d, parent.decision1]\n    recipe:"
 )
-"""`stage`: a part, as it declares `..`, so it has no universes, and the universes of the
-analysis above it set its decisions."""
+"""`stage`: a sub-analysis, so it has no universes, and the root's universes set its
+decisions."""
 
 LIB = (
     """spec_version: "0.1.0"
@@ -131,8 +131,6 @@ BROKEN_FILES = {
   through_nothing:
     decisions: {decision1: a, stage.d: a, stage.inner.d: a, stage.nothere.parent.decision1: a}
 """,
-    "stage/inner/astra.yaml": INNER.replace("    recipe:", "    decisions: [d]\n    recipe:")
-    + "universes:\n  i1: {label: Sets nothing}\n",
     "bad/astra.yaml": LIB + "name: not a field\n",
 }
 
@@ -228,19 +226,6 @@ def test_driving_extends_through_no_declaration_with_a_commit(tmp_path: Path) ->
     ]
 
 
-def test_a_part_is_driven_by_the_analysis_above_it(kept: Path) -> None:
-    """`stage` and `lib` each declare `..`, outside their folders, so each is a part, with no
-    universes of its own; the root's universes set `stage`'s decisions. The root, `inner` and
-    `deep` reach outside their folders through nothing they declare by `path`."""
-    stack = bound(kept)
-    context = Context(stack, Catalogue.load())
-    assert {str(identity): [d.id for d in way] for identity, way in context.parts.items()} == {
-        "stage": ["parent"],
-        "lib": ["parent"],
-    }
-    assert ("stage",) in chains(stack)
-
-
 def test_the_analyses_built_in_a_universe_are_known_by_identity(kept: Path) -> None:
     """The driver itself, and each analysis a driven declaration reaches, once however
     many chains reach it (`stage.inner` and `inner`)."""
@@ -274,8 +259,7 @@ def test_each_rule_on_driving_is_broken(broken_report: api.ValidationReport) -> 
     """Two own keys spelling one decision, even selecting one option, and a key spelling
     an inherited decision under another key (DUPLICATE_ELEMENT); `stage.again.d` written through
     `again: {path: .}`, `stage.parent.decision1` back to the root, and `self.decision1`
-    (LOOPING_KEY); a universe that leaves unset decisions driven by another universe's keys,
-    and a driven analysis's own universe, `inner`'s `i1`, that leaves its own `d` unset
+    (LOOPING_KEY); and a universe that leaves unset decisions driven by another universe's keys
     (MISSING_DECISION). A key that loops still names its decision, so the excluded `stage.d: c`
     is EXCLUDED_OPTION_SELECTED and `unset`'s neighbours aren't missing."""
     assert found(broken_report) == [
@@ -287,7 +271,6 @@ def test_each_rule_on_driving_is_broken(broken_report: api.ValidationReport) -> 
         ("LOOPING_KEY", "astra.yaml", "/universes/itself/decisions", "self.decision1"),
         ("MISSING_DECISION", "astra.yaml", "/universes/unset/decisions", None),
         ("MISSING_DECISION", "astra.yaml", "/universes/unset/decisions", None),
-        ("MISSING_DECISION", "stage/inner/astra.yaml", "/universes/i1", None),
     ]
 
 
@@ -326,12 +309,6 @@ def test_missing_decision_names_each_decision_unset(broken_report: api.Validatio
     ]
     assert [message.split("`")[3] for message in messages] == ["stage.d", "stage.inner.d"]
     assert "this analysis's universes drive `stage`" in messages[0]
-    inner = [
-        d.message
-        for d in broken_report.diagnostics
-        if d.code == "MISSING_DECISION" and d.location.file == "stage/inner/astra.yaml"
-    ]
-    assert [message.split("`")[3] for message in inner] == ["d"]
 
 
 def test_nothing_through_an_undetermined_analysis_or_a_name_that_names_nothing(
@@ -602,8 +579,7 @@ def test_a_switch_over_a_remotes_pinned_results_keeps_key_through_commit(
 SUBANALYSIS = """\
 spec_version: "0.1.0"
 analyses:
-  inner: {path: inner}
-  part: {path: part}
+  inner: <inner>
 inputs:
   input1: {path: data/input1.csv}
 decisions:
@@ -624,8 +600,8 @@ universes:
     decisions: {decision1: b}
   inner_w1: {analysis: inner, universe: w1}
 """
-"""`subanalysis`, self-contained, with universes `u1` and `v1` of its own and an import of its
-`inner`'s `w1`."""
+"""`subanalysis`, the top of a repository of its own, with universes `u1` and `v1` of its own and
+an import of its `inner`'s `w1`."""
 
 SUBANALYSIS_INNER = """\
 spec_version: "0.1.0"
@@ -643,23 +619,13 @@ universes:
   w1:
     decisions: {e: a}
 """
-"""`subanalysis`'s `inner`, with a universe `w1` of its own."""
-
-SUBANALYSIS_PART = """\
-spec_version: "0.1.0"
-analyses:
-  parent: {path: ..}
-universes:
-  parent_u1: {analysis: parent, universe: u1}
-"""
-"""`subanalysis`'s `part`, which declares its parent, so its `universes` hold only an import of
-its parent's `u1`."""
+"""`subanalysis`'s `inner`, the top of another, with a universe `w1` of its own."""
 
 PINNING = """\
 spec_version: "0.1.0"
 analyses:
-  subanalysis: {path: subanalysis}
-  again: {path: subanalysis}
+  subanalysis: <subanalysis>
+  again: <subanalysis>
 inputs:
   input1: {path: data/input1.csv}
 decisions:
@@ -677,7 +643,7 @@ outputs:
     type: table
     format: csv
     inputs:
-      - subanalysis.output1#u1               # the root's u1
+      - subanalysis.output1#u1               # the root's u1, where subanalysis isn't built
       - subanalysis.output1#subanalysis_u1   # subanalysis's own u1, imported
       - subanalysis.output1#v1               # subanalysis's own v1
       - subanalysis.output1#subanalysis_v1   # the import of subanalysis's v1
@@ -698,10 +664,10 @@ outputs:
     recipe:
       command: python make.py '{output}'
 universes:
-  u1:                                        # the root's u1 drives subanalysis
-    decisions: {decision1: a, subanalysis.decision1: a}
+  u1:
+    decisions: {decision1: a}
   u2:
-    decisions: {decision1: b, subanalysis.decision1: b}
+    decisions: {decision1: b}
   subanalysis_u1:                            # an import of subanalysis's u1
     analysis: subanalysis
     universe: u1
@@ -720,15 +686,13 @@ findings:
 
 @pytest.fixture(scope="module")
 def pinning(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    files = {
-        "astra.yaml": PINNING,
-        "data/input1.csv": "1\n",
-        "subanalysis/astra.yaml": SUBANALYSIS,
-        "subanalysis/data/input1.csv": "2\n",
-        "subanalysis/inner/astra.yaml": SUBANALYSIS_INNER,
-        "subanalysis/part/astra.yaml": SUBANALYSIS_PART,
-    }
-    return repository(tmp_path_factory.mktemp("pinning"), files)
+    """The root, in a folder beside `subanalysis` and `inner`, each a remote."""
+    top = tmp_path_factory.mktemp("pinning")
+    inner = by_url(top / "inner", {"astra.yaml": SUBANALYSIS_INNER})
+    files = {"astra.yaml": SUBANALYSIS.replace("<inner>", inner), "data/input1.csv": "2\n"}
+    subanalysis = by_url(top / "subanalysis", files)
+    files = {"astra.yaml": PINNING.replace("<subanalysis>", subanalysis), "data/input1.csv": "1\n"}
+    return repository(top / "root", files)
 
 
 def test_a_pin_names_the_files_entry_or_the_elements_analysiss_universe(pinning: Path) -> None:
@@ -741,7 +705,7 @@ def test_a_pin_names_the_files_entry_or_the_elements_analysiss_universe(pinning:
         for r, pinned in pins(stack, imports(stack)).items()
         if r.file == ROOT_ID and r.pointer[:2] == ("outputs", "output5")
     }
-    subanalysis = Identity("subanalysis")
+    subanalysis = Identity("", head(pinning.parent / "subanalysis"))
     assert named == {
         ("outputs", "output5", "inputs", 0): Element(ROOT_ID, "universe", "u1"),
         ("outputs", "output5", "inputs", 1): Element(subanalysis, "universe", "u1"),
@@ -755,15 +719,15 @@ def test_a_pin_names_the_files_entry_or_the_elements_analysiss_universe(pinning:
 def test_imports_of_one_universe_name_that_one_universe(pinning: Path) -> None:
     """An import resolves in its file by identity, under any id and through any
     declaration; one in a declared analysis's file can name the universe of an analysis it
-    declares, and one in a part's file its parent's."""
+    declares."""
     found = imports(bound(pinning))
-    subanalysis_u1 = Element(Identity("subanalysis"), "universe", "u1")
+    subanalysis = Identity("", head(pinning.parent / "subanalysis"))
+    subanalysis_u1 = Element(subanalysis, "universe", "u1")
     assert found[ROOT_ID, "subanalysis_u1"] == found[ROOT_ID, "again_u1"] == subanalysis_u1
-    assert found[ROOT_ID, "subanalysis_v1"] == Element(Identity("subanalysis"), "universe", "v1")
+    assert found[ROOT_ID, "subanalysis_v1"] == Element(subanalysis, "universe", "v1")
     assert found[ROOT_ID, "nothing_v9"] is None
-    inner_w1 = Element(Identity("subanalysis/inner"), "universe", "w1")
-    assert found[Identity("subanalysis"), "inner_w1"] == inner_w1
-    assert found[Identity("subanalysis/part"), "parent_u1"] == subanalysis_u1
+    inner_w1 = Element(Identity("", head(pinning.parent / "inner")), "universe", "w1")
+    assert found[subanalysis, "inner_w1"] == inner_w1
 
 
 def test_a_pin_that_names_no_universe_breaks_unknown_pin_universe(pinning: Path) -> None:

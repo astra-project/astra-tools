@@ -20,8 +20,7 @@ included to make drift reviewable; an independent implementation need only match
 diagnostic codes, levels and locations unless it also promises identical wording.
 
 - `driven`: two root universes, a driven stage, a result of the stage built once that
-  both analyses read, a tracked input, and a pin to the stage's own universe. Every
-  record is missing.
+  both analyses read, and a tracked input. Every record is missing.
 - `switch-status`: switches and a pinned input, inherited selections, evidence of
   a switch, pinned switch and switch with no result; records that are unchanged,
   stale directly or through an input, or missing; bytes that are present or absent.

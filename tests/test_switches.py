@@ -27,7 +27,7 @@ from astra._internal.analysis.rules.context import Context
 from astra._internal.analysis.stack import Element, Identity, bind
 from astra._internal.documents.catalogue import Catalogue
 from astra._internal.sources.reader import worktree
-from tests.conftest import MINIMAL, git, repository
+from tests.conftest import MINIMAL, by_url, git, repository
 
 ROOT = Identity("")
 
@@ -101,7 +101,7 @@ outputs:
   output2:
     type: table
     format: csv
-    inputs: [output1#u1, output1#u2, stage.output3#v1]
+    inputs: [output1#u1, output1#u2]
     recipe:
       command: python src/output2.py {inputs} '{output}'
   switch1:
@@ -149,9 +149,6 @@ outputs:
     decisions: [decision2]
     recipe:
       command: python src/output3.py '{inputs.input2}' '{decisions.decision2}' '{output}'
-universes:
-  v1:
-    decisions: {decision2: a}
 """
 
 RUNNING_UPSTREAM = """\
@@ -979,70 +976,6 @@ def test_constraints_on_a_decision_used_are_judged(tmp_path: Path) -> None:
     )
 
 
-PINNING_STAGE = """\
-spec_version: "0.1.0"
-analyses:
-  stage: {path: stage}
-outputs:
-  out:
-    type: table
-    format: csv
-    inputs: [stage.output3#v1]
-    recipe:
-      command: python make.py '{inputs.stage.output3#v1}' '{output}'
-"""
-
-MODED_STAGE = """\
-spec_version: "0.1.0"
-decisions:
-  mode:
-    options: {x: {}, y: {}}
-  decision2:
-    options:
-      a:
-        requires: [mode.x]
-      b: {}
-outputs:
-  output3:
-    type: data
-    format: csv
-    decisions: [decision2]
-    recipe:
-      command: python make.py '{decisions.decision2}' '{output}'
-  plain:
-    type: data
-    format: csv
-    recipe:
-      command: python make.py '{output}'
-  sel:
-    switch: mode
-    cases: {x: output3, y: plain}
-universes:
-  v1:
-    decisions: {mode: y, decision2: a}
-"""
-"""`stage`'s own `v1` takes `plain`, so `stage` driving uses `mode` there, and not
-`decision2`."""
-
-
-def test_constraints_hold_among_the_decisions_used_through_a_pin(tmp_path: Path) -> None:
-    """Results: in another analysis's universe, constraints hold too among the decisions that
-    something reached through a pin uses there. The root pins `stage.output3` to `v1`, so
-    `decision2: a` there must meet its `requires` (`MISSING_REQUIRED_OPTION`), reported in
-    `stage`'s file; `stage`'s own run doesn't use `decision2` in `v1` (`INACTIVE_DECISION`)."""
-    files = {"astra.yaml": PINNING_STAGE, "stage/astra.yaml": MODED_STAGE}
-    assert found(validated(tmp_path / "pinned", files)) == ordered(
-        [
-            ("INACTIVE_DECISION", "stage/astra.yaml", "/universes/v1/decisions", "decision2"),
-            ("MISSING_REQUIRED_OPTION", "stage/astra.yaml", "/universes/v1/decisions", "decision2"),
-        ]
-    )
-    files["astra.yaml"] = PINNING_STAGE.replace("stage.output3#v1", "stage.plain#v1")
-    assert found(validated(tmp_path / "plain", files)) == [
-        ("INACTIVE_DECISION", "stage/astra.yaml", "/universes/v1/decisions", "decision2")
-    ]
-
-
 def test_a_constraint_is_no_use(tmp_path: Path) -> None:
     """Rules: constraints never make a decision used, nor need its analysis driven. The root
     reads `other.output1` though no key drives `other` (`NOT_BUILT_IN_UNIVERSE`,
@@ -1181,134 +1114,17 @@ universes:
     ]
 
 
-SUB2 = """\
-spec_version: "0.1.0"
-decisions:
-  decision0:
-    options: {x: {}, y: {}}
-  decision5:
-    options: {p: {}, q: {}}
-outputs:
-  fit:
-    type: metric
-    format: json
-    decisions: [decision5]
-    recipe:
-      command: python make.py '{decisions.decision5}' '{output}'
-  other:
-    type: metric
-    format: json
-    recipe:
-      command: python make.py '{output}'
-  sw:
-    switch: decision0
-    cases: {x: fit, y: other}
-universes:
-  w1:
-    decisions: {decision0: y}
-"""
-"""An analysis whose own `w1` takes `other`, and so neither uses nor may set `decision5`."""
-
-
-def test_a_pin_no_reach_follows_asks_its_universe_for_nothing(tmp_path: Path) -> None:
-    """Rules, `PIN_NOT_BUILT`: the second row is judged for a pin the driving analysis reaches.
-    The root reads nothing of `sub`, so `sub`'s pin of `sub2.fit` to `w1` asks `w1` for nothing,
-    though `fit` lists `decision5`, which `w1` doesn't set."""
-    sub = """\
-spec_version: "0.1.0"
-analyses:
-  sub2: {path: sub2}
-outputs:
-  o_unread:
-    type: metric
-    format: json
-    inputs: [sub2.fit#w1]
-    recipe:
-      command: python make.py '{inputs.sub2.fit#w1}' '{output}'
-"""
-    root = MINIMAL + "analyses:\n  sub: {path: sub}\n"
-    files = {"astra.yaml": root, "sub/astra.yaml": sub, "sub/sub2/astra.yaml": SUB2}
-    assert found(validated(tmp_path, files)) == []
-
-
-def test_a_reached_pin_asks_its_universe_for_what_it_reaches_uses_there(tmp_path: Path) -> None:
-    """Rules, `PIN_NOT_BUILT`: a universe of another analysis, named by a reached pin, sets each
-    decision that something reached through the pin uses there and the universe doesn't. The
-    pin reaches `report` in `v1`, which reads `sw1`, which switches on `decision1`; `sub`'s own
-    run takes `other` in `v1`, and doesn't use it. Reported at the pin, in the root's file."""
-    root = """\
-spec_version: "0.1.0"
-analyses:
-  sub: {path: sub}
-outputs:
-  result:
-    type: metric
-    format: json
-    inputs: [sub.report#v1]
-    recipe:
-      command: python make.py '{inputs.sub.report#v1}' '{output}'
-universes:
-  u1: {}
-"""
-    sub = (
-        """\
-spec_version: "0.1.0"
-decisions:
-  decision0:
-    options: {x: {}, y: {}}
-  decision1:
-    options: {a: {}, b: {}}
-outputs:
-"""
-        + output("o_x")
-        + output("o_y")
-        + output("other")
-        + output("report", "[sw1]")
-        + switch("sw1", "decision1", "{a: o_x, b: o_y}")
-        + switch("sw", "decision0", "{x: report, y: other}")
-        + "universes:\n  v1:\n    decisions: {decision0: y}\n"
-    )
-    report = validated(tmp_path, {"astra.yaml": root, "sub/astra.yaml": sub})
-    assert found(report) == [("PIN_NOT_BUILT", "astra.yaml", "/outputs/result/inputs/0", None)]
-    (diagnostic,) = report.diagnostics
-    assert "neither sets nor uses" in diagnostic.message
-
-
-def test_a_decision_a_pinned_universe_uses_itself_is_missing_there(tmp_path: Path) -> None:
-    """Rules, `PIN_NOT_BUILT`, second row: what the universe uses itself is left to
-    `MISSING_DECISION`, reported in its own file. `subanalysis` plans `output1` in `v1`, which
-    uses `decision1`."""
-    root = """\
-spec_version: "0.1.0"
-analyses:
-  subanalysis: {path: subanalysis}
-outputs:
-  result:
-    type: metric
-    format: json
-    inputs: [subanalysis.output1#v1]
-    recipe:
-      command: python make.py '{inputs.subanalysis.output1#v1}' '{output}'
-"""
-    sub = MINIMAL.replace("result:", "output1:").replace(
-        "    recipe:", "    decisions: [decision1]\n    recipe:"
-    ) + ("decisions:\n  decision1:\n    options: {a: {}, b: {}}\nuniverses:\n  v1: {}\n")
-    files = {"astra.yaml": root, "subanalysis/astra.yaml": sub}
-    assert found(validated(tmp_path, files)) == [
-        ("MISSING_DECISION", "subanalysis/astra.yaml", "/universes/v1", None)
-    ]
-
-
 def test_a_pin_needing_a_key_its_universe_may_not_set_has_no_valid_form(tmp_path: Path) -> None:
     """Elements: a pin into an analysis's own universe can read only what uses decisions that
     universe uses on some branch, as it may set no other. Through the import `stage_v1`, the
     root pins `stage.inner.output8` to `stage`'s `v1`; nothing of `stage` reads `inner`. Without
-    a key for `inner.decision4`, `PIN_NOT_BUILT`, at the pin; with it, `UNUSED_DECISION` in
-    `stage`'s file."""
+    a key for `inner.decision4`, `PIN_NOT_BUILT`, at the pin, as `v1` neither sets nor uses it;
+    with it, `UNUSED_DECISION` in `stage`'s file at its commit, for which the declaration of
+    `stage` breaks `DECLARED_ANALYSIS_INVALID`."""
     root = """\
 spec_version: "0.1.0"
 analyses:
-  stage: {path: stage}
+  stage: %s
 outputs:
   result:
     type: metric
@@ -1342,15 +1158,16 @@ universes:
         "decisions:\n  decision4:\n    options: {a: {}, b: {}}\n"
         "outputs:\n" + output("output8", decisions="[decision4]")
     )
-    files = {"astra.yaml": root, "stage/astra.yaml": stage, "stage/inner/astra.yaml": inner}
-    assert found(validated(tmp_path / "unset", files)) == [
-        ("PIN_NOT_BUILT", "astra.yaml", "/outputs/result/inputs/0", None)
-    ]
-    files["stage/astra.yaml"] = stage.replace(
-        "{decision2: a}", "{decision2: a, inner.decision4: a}"
-    )
-    assert found(validated(tmp_path / "set", files)) == [
-        ("UNUSED_DECISION", "stage/astra.yaml", "/universes/v1/decisions", "inner.decision4")
+    files = {"astra.yaml": stage, "inner/astra.yaml": inner}
+    declared = by_url(tmp_path / "stage", files)
+    report = validated(tmp_path / "unset", {"astra.yaml": root % declared})
+    assert found(report) == [("PIN_NOT_BUILT", "astra.yaml", "/outputs/result/inputs/0", None)]
+    assert "neither sets nor uses" in report.diagnostics[0].message
+    files["astra.yaml"] = stage.replace("{decision2: a}", "{decision2: a, inner.decision4: a}")
+    declared = by_url(tmp_path / "stage", files)
+    assert found(validated(tmp_path / "set", {"astra.yaml": root % declared})) == [
+        ("DECLARED_ANALYSIS_INVALID", "astra.yaml", "/analyses/stage", None),
+        ("UNUSED_DECISION", "astra.yaml", "/universes/v1/decisions", "inner.decision4"),
     ]
 
 
@@ -1607,7 +1424,7 @@ universes:
 FROM_COMMIT = """\
 spec_version: "0.1.0"
 analyses:
-  lib: {path: lib, commit: "%s"}
+  lib: {url: "%s", commit: "%s"}
 outputs:
   result:
     type: metric
@@ -1616,24 +1433,25 @@ outputs:
     recipe:
       command: python make.py '{inputs.lib.sw#v1}' '{output}'
 """
-"""A root that reads the switch of `lib`, declared at a commit, pinned to `lib`'s own `v1`: an
-analysis from a commit is only read, never driven."""
+"""A root that reads the switch of `lib`, declared by `url` and `commit`, pinned to `lib`'s own
+`v1`: an analysis from a commit is only read, never driven."""
 
 
 def test_a_switch_of_an_analysis_from_a_commit_takes_the_case_written_there(
     tmp_path: Path,
 ) -> None:
     """Results: a switch of an analysis declared with a `commit` is read with its files at its
-    commit. There, `sw`'s case for `a` is `one`; in the working tree it has since become `two`.
+    commit. There, `sw`'s case for `a` is `one`; at a later commit it has since become `two`.
     `result`, built once, reads `lib.one` in `lib`'s own `v1`."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
-    commit = git(top, "rev-parse", "HEAD").strip()
+    remote = repository(tmp_path / "lib", {"astra.yaml": LIB})
+    commit = git(remote, "rev-parse", "HEAD").strip()
     changed = LIB.replace("cases: {a: one}", "cases: {a: two}")
-    repository(top, {"astra.yaml": FROM_COMMIT % commit, "lib/astra.yaml": changed})
+    repository(remote, {"astra.yaml": changed})
+    top = repository(tmp_path / "root", {"astra.yaml": FROM_COMMIT % (remote.as_uri(), commit)})
     assert found(api.validate(top)) == []
     stack = bind(*worktree(top))[0]
     assert stack is not None
-    lib = Identity("lib", commit)
+    lib = Identity("", commit)
     (entry,) = [r for r in stack.resolutions if r.field == "inputs" and r.written == "lib.sw#v1"]
     assert entry.element == Element(lib, "switch", "sw")
     v1 = Element(lib, "universe", "v1")

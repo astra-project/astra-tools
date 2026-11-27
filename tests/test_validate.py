@@ -374,11 +374,14 @@ def test_the_examples_are_found() -> None:
 
 @pytest.fixture(scope="module")
 def examples(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """astra-spec's `examples/`, committed in a repository of their own, whose top holds an
-    analysis with only a `spec_version`. They read no input file, so there is none to write."""
+    """astra-spec's `examples/`, each committed in a repository of its own, whose top it is.
+    They read no input file, so there is none to write."""
     top = tmp_path_factory.mktemp("examples")
     shutil.copytree(SPEC / "examples", top / "examples")
-    return repository(top, {"astra.yaml": 'spec_version: "0.1.0"\n'})
+    for example in (top / "examples").iterdir():
+        if example.is_dir():
+            repository(example, {})
+    return top
 
 
 @pytest.mark.parametrize("folder", EXAMPLES, ids=lambda path: path.relative_to(SPEC).as_posix())

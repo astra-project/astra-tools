@@ -4,7 +4,7 @@ no effective selection.
 
 In the stacks, the root drives `subanalysis`, which consumes the root's `decision1` through
 `parent: {path: ..}`, and `stage`, which declares `inner` and a second `inner_undriven` of one
-folder; `other` is never driven, and has a universe `v1` of its own. The breaking stack adds
+folder; `other` is never driven. The breaking stack adds
 `undriven: {path: subanalysis}`, `stage_undriven: {path: stage}` and a root `inner` that keys drive
 beside `stage.inner`. The last stack declares `previous`, the analysis's own folder at an earlier
 commit.
@@ -70,11 +70,8 @@ outputs:
     decisions: [d]
     recipe:
       command: python make.py '{decisions.d}' '{output}'
-universes:
-  v1:
-    decisions: {d: a}
 """
-"""An analysis no key of the root's universes drives, with a universe of its own."""
+"""An analysis no key of the root's universes drives."""
 
 STAGE = """\
 spec_version: "0.1.0"
@@ -128,7 +125,6 @@ outputs:
       - subanalysis.output1#u1
       - stage.inner.out
       - stage.stage_out
-      - other.other_out#v1
     recipe:
       command: python make.py '{output}'
 universes:
@@ -137,8 +133,7 @@ universes:
   u2:
     decisions: {decision1: b, subanalysis.decision1: b, stage.d: b, stage.inner.d: b}
 """
-"""Reads through declarations the root's universes drive, and `other`'s output in its own
-`v1`."""
+"""Reads through declarations the root's universes drive."""
 
 BROKEN_ROOT = (
     ROOT.replace(
@@ -226,10 +221,9 @@ def found(report: api.ValidationReport, code: str) -> list[tuple[str, str]]:
 
 def test_reads_through_driven_declarations_keep_both_rules(kept: api.ValidationReport) -> None:
     """The root's universes drive `subanalysis`, `stage` and `stage.inner`, so its
-    `output6` reads their outputs built per universe without a pin, or pinned to `u1`; it reads
-    `other`'s in `other`'s own `v1`, where `other` is the driver; and `subanalysis` consumes
-    the root's `decision1` as `parent.decision1`, since the analysis whose universe is being
-    built is always built in it."""
+    `output6` reads their outputs built per universe without a pin, or pinned to `u1`; and
+    `subanalysis` consumes the root's `decision1` as `parent.decision1`, since the analysis whose
+    universe is being built is always built in it."""
     assert kept.diagnostics == ()
 
 
@@ -257,9 +251,8 @@ def test_each_use_of_an_analysis_not_built_breaks_both_rules_in_the_drivers_file
     """`other` isn't built in the root's universes, so in the root's file its output read without a
     pin or pinned to `u1`, and its decision listed by a planned result's output, break both rules;
     in `stage`'s file, where `stage_other` reads its output and lists its decision,
-    NOT_BUILT_IN_UNIVERSE alone holds them. Reads through driven declarations, `other`'s output in
-    its own `v1`, and the root's constraint naming `other`'s decision, which uses nothing (Rules),
-    break neither."""
+    NOT_BUILT_IN_UNIVERSE alone holds them. Reads through driven declarations, and the root's
+    constraint naming `other`'s decision, which uses nothing (Rules), break neither."""
     uses = [
         ("astra.yaml", "/outputs/output7/inputs/4"),
         ("astra.yaml", "/outputs/output7/inputs/5"),

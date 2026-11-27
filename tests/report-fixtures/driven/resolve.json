@@ -1,6 +1,6 @@
 {
   "spec_version": "0.1.0",
-  "head": "c8ef4a5f2abea6eb46ece53c1001d555dd8c3ca8",
+  "head": "95f003f228633d2f4cffc76b502a7ac72a8777fa",
   "analyses": [
     {
       "key": "",
@@ -27,11 +27,6 @@
             {
               "entry": "stage.fit",
               "target": "stage.outputs.fit"
-            },
-            {
-              "entry": "stage.fit#local",
-              "target": "stage.outputs.fit",
-              "universe": "stage.universes.local"
             }
           ]
         }
@@ -41,7 +36,7 @@
         {
           "ref": "findings.fit",
           "kind": "finding",
-          "claim": "The driver compares two methods and the stage's own result.",
+          "claim": "The driver compares two methods.",
           "evidence": [
             {
               "cites": [
@@ -61,20 +56,6 @@
                   "output": "stage.outputs.fit",
                   "target_universe": "universes.alternate",
                   "result": "stage.fit#alternate"
-                }
-              ]
-            },
-            {
-              "cites": [
-                "stage:fit#local"
-              ],
-              "artifact": "stage.fit#local",
-              "bindings": [
-                {
-                  "universe": "stage.universes.local",
-                  "output": "stage.outputs.fit",
-                  "target_universe": "stage.universes.local",
-                  "result": "stage:fit#local"
                 }
               ]
             }
@@ -162,15 +143,7 @@
       ],
       "prior_insights": [],
       "findings": [],
-      "universes": [
-        {
-          "ref": "stage.universes.local",
-          "selection": {
-            "stage.decisions.method": "a"
-          },
-          "tags": []
-        }
-      ],
+      "universes": [],
       "switches": []
     }
   ],
@@ -213,25 +186,6 @@
       "command": "fit results/shared.txt a > ../results/baseline/stage.fit.json"
     },
     {
-      "id": "stage:fit#local",
-      "output": "stage.outputs.fit",
-      "places": [
-        {
-          "address": "fit#local",
-          "record_path": "stage/.astra/records/local/fit.json",
-          "file_path": "stage/results/local/fit.json"
-        }
-      ],
-      "universe": "stage.universes.local",
-      "inputs": [
-        {
-          "entry": "shared",
-          "result": "stage:shared"
-        }
-      ],
-      "command": "fit results/shared.txt a > results/local/fit.json"
-    },
-    {
       "id": "comparison#baseline",
       "output": "outputs.comparison",
       "places": [
@@ -250,13 +204,9 @@
         {
           "entry": "stage.fit",
           "result": "stage.fit#baseline"
-        },
-        {
-          "entry": "stage.fit#local",
-          "result": "stage:fit#local"
         }
       ],
-      "command": "cat stage/results/shared.txt results/baseline/stage.fit.json stage/results/local/fit.json > results/baseline/comparison.txt"
+      "command": "cat stage/results/shared.txt results/baseline/stage.fit.json > results/baseline/comparison.txt"
     },
     {
       "id": "stage.fit#alternate",
@@ -296,40 +246,11 @@
         {
           "entry": "stage.fit",
           "result": "stage.fit#alternate"
-        },
-        {
-          "entry": "stage.fit#local",
-          "result": "stage:fit#local"
         }
       ],
-      "command": "cat stage/results/shared.txt results/alternate/stage.fit.json stage/results/local/fit.json > results/alternate/comparison.txt"
+      "command": "cat stage/results/shared.txt results/alternate/stage.fit.json > results/alternate/comparison.txt"
     }
   ],
-  "notes": [
-    {
-      "code": "FALLBACK_PIN",
-      "level": "note",
-      "message": "`stage.fit#local` names `local` of `stage` only because this file has no universe `local`: adding one, or an import of that id, would change what it names",
-      "location": {
-        "file": "astra.yaml",
-        "pointer": "/outputs/comparison/inputs/2",
-        "line": 9,
-        "column": 39
-      },
-      "related": []
-    },
-    {
-      "code": "FALLBACK_PIN",
-      "level": "note",
-      "message": "`stage.fit#local` names `local` of `stage` only because this file has no universe `local`: adding one, or an import of that id, would change what it names",
-      "location": {
-        "file": "astra.yaml",
-        "pointer": "/findings/fit/evidence/1/artifact",
-        "line": 22,
-        "column": 19
-      },
-      "related": []
-    }
-  ],
+  "notes": [],
   "schema_version": "astra-tools.resolved-analysis.v1"
 }

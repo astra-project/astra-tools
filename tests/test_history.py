@@ -24,7 +24,7 @@ from astra._internal.sources.remote import Remotes
 from astra.cli import main
 from astra.model.provenance_record import ProvenanceRecord, RecordedInput
 from tests.conftest import ENVIRONMENT, MINIMAL, build, git, remake, repository
-from tests.test_resolve import LIB
+from tests.test_resolve import TABLES
 from tests.test_validate import WORKED_EXAMPLE
 
 OTHER = api.Environment("urn:example:environment2")
@@ -37,11 +37,11 @@ outputs:
   result:
     type: table
     format: csv
-    inputs: [lib.out#v1]
+    inputs: [lib.once]
     recipe:
       command: python make.py {inputs} '{output}'
 """
-"""A root that reads `lib`'s `out` in `lib`'s own `v1`, `lib` read at a commit that holds its
+"""A root that reads `lib`'s `once`, built once, `lib` read at a commit that holds its
 records."""
 
 
@@ -318,15 +318,16 @@ def test_an_invalid_analysis_has_no_history(tmp_path: Path) -> None:
 def test_a_result_of_an_analysis_from_a_commit_has_its_one_version(tmp_path: Path) -> None:
     """Its records are read at the declared commit, which is its one version, and
     `get` reads at a revision of the repository that holds it."""
-    top = repository(tmp_path, {"astra.yaml": MINIMAL, "lib/astra.yaml": LIB})
+    files = {"astra.yaml": MINIMAL, "lib/astra.yaml": TABLES, "lib/data/table.csv": "1\n"}
+    top = repository(tmp_path, files)
     build(top, top / "lib")
     holding = commit(top)
     repository(top, {"astra.yaml": FROM_COMMIT % holding})
     kept = history(top)
-    (version,) = kept.timeline("out#v1")
-    assert (version.commit, version.place.record) == (holding, "lib/.astra/records/v1/out.json")
-    assert record(version).address == "out#v1"
-    assert kept.get("out#v1", holding) == b"out#v1\n"
+    (version,) = kept.timeline("once")
+    assert (version.commit, version.place.record) == (holding, "lib/.astra/records/once.json")
+    assert record(version).address == "once"
+    assert kept.get("once", holding) == b"once\n"
 
 
 # --- astra history ---

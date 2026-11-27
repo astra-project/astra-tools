@@ -99,6 +99,14 @@ def repository(top: Path, files: Mapping[str, str | bytes]) -> Path:
     return top
 
 
+def by_url(top: Path, files: Mapping[str, str | bytes]) -> str:
+    """A declaration by `url` and `commit`, as a flow map, of the analysis at the top of the
+    repository at `top`, with `files` committed (`repository`): another local repository,
+    reached by a `file://` URL at its last commit, stands for a remote."""
+    commit = git(repository(top, files), "rev-parse", "HEAD").strip()
+    return f"{{url: '{top.as_uri()}', commit: '{commit}'}}"
+
+
 def analysis(folder: Path, text: str = MINIMAL) -> Path:
     """`folder`, made if need be, with `text` as its `astra.yaml`."""
     folder.mkdir(parents=True, exist_ok=True)

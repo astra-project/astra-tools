@@ -6,7 +6,7 @@ outputs:
   comparison:
     type: report
     format: txt
-    inputs: [stage.shared, stage.fit, stage.fit#local]
+    inputs: [stage.shared, stage.fit]
     recipe: {command: "cat {inputs} > {output}"}
 universes:
   baseline:
@@ -16,7 +16,6 @@ universes:
     decisions: {stage.method: b}
 findings:
   fit:
-    claim: The driver compares two methods and the stage's own result.
+    claim: The driver compares two methods.
     evidence:
       - artifact: stage.fit
-      - artifact: stage.fit#local

@@ -311,7 +311,7 @@ def test_an_artifact_on_a_switch_whose_case_names_nothing_or_cycles_isnt_judged(
     ("analyses", "codes"),
     [
         ("{sub: {path: nothere}}", ["MISSING_DECLARED_ANALYSIS"]),
-        ("{sub: {path: ..}}", ["DECLARATION_OUTSIDE_REPOSITORY", "UNIVERSES_IN_PART"]),
+        ("{sub: {path: ..}}", ["DECLARATION_OUTSIDE_REPOSITORY"]),
         ("{sub: {path: bad}}", ["UNKNOWN_FIELD"]),
         (
             f"{{sub: {{url: 'file:///nowhere/r.git', commit: '{'0' * 40}'}}}}",
@@ -324,8 +324,8 @@ def test_no_address_through_an_undetermined_analysis_is_checked(
 ) -> None:
     """In the files that declare an undetermined analysis, no address through that declaration
     is checked; the declaration's own code is reported, and the rules on what kind of
-    declaration it is still apply: `..` above the top makes the root a part, whose `u1` breaks
-    UNIVERSES_IN_PART, and the key `sub.decision1` through a `url` breaks KEY_THROUGH_COMMIT."""
+    declaration it is still apply: the key `sub.decision1` through a `url` breaks
+    KEY_THROUGH_COMMIT."""
     text = (
         KEPT.replace(
             "analyses:\n  sub: {path: sub}\n  again: {path: ./sub/}\n  self: {path: .}\n",
